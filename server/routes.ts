@@ -298,6 +298,109 @@ export async function registerRoutes(
     }
   });
 
+  // Scan actual files from source folder (library scan)
+  app.post("/api/scan-folder", async (req, res) => {
+    try {
+      const settings = await storage.getAllSettings();
+      const sourcePath = settings.sourcePath || "/Inbox";
+      const moviesPath = settings.moviesPath || "/Movies";
+      const tvShowsPath = settings.tvShowsPath || "/TV Shows";
+
+      // In Docker, VPS root is mounted at /host
+      const HOST_PREFIX = "/host";
+      const isDocker = fs.existsSync(HOST_PREFIX);
+      
+      const actualSourcePath = isDocker 
+        ? HOST_PREFIX + sourcePath 
+        : sourcePath;
+
+      // Check if source folder exists
+      if (!fs.existsSync(actualSourcePath)) {
+        return res.status(400).json({ 
+          error: `Source folder not found: ${sourcePath}. Please set the correct path in Settings.` 
+        });
+      }
+
+      // Video file extensions
+      const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.webm', '.flv', '.ts', '.m2ts'];
+      
+      // Recursively find all video files
+      const findVideoFiles = (dir: string, files: string[] = []): string[] => {
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+              findVideoFiles(fullPath, files);
+            } else if (entry.isFile()) {
+              const ext = path.extname(entry.name).toLowerCase();
+              if (videoExtensions.includes(ext)) {
+                files.push(fullPath);
+              }
+            }
+          }
+        } catch (e) {
+          // Skip unreadable directories
+        }
+        return files;
+      };
+
+      const videoFiles = findVideoFiles(actualSourcePath);
+      const results = [];
+
+      for (const filePath of videoFiles) {
+        const filename = path.basename(filePath);
+        
+        // Check if already scanned
+        const existing = await storage.getMediaItemByFilename(filename);
+        if (existing) continue;
+
+        const parsed = parseMediaFilename(filename);
+        const destinationPath = generateDestinationPath(parsed, parsed.detectedName, {
+          movies: moviesPath,
+          tvshows: tvShowsPath,
+        });
+
+        // Convert back to user-facing path
+        const userPath = isDocker 
+          ? filePath.replace(HOST_PREFIX, '') 
+          : filePath;
+
+        const item = await storage.createMediaItem({
+          originalFilename: filename,
+          originalPath: userPath,
+          extension: parsed.extension,
+          detectedType: parsed.detectedType,
+          detectedName: parsed.detectedName,
+          cleanedName: parsed.cleanedName,
+          year: parsed.year,
+          season: parsed.season,
+          episode: parsed.episode,
+          status: "pending",
+          destinationPath,
+          confidence: parsed.confidence,
+        });
+
+        results.push(item);
+      }
+
+      await storage.createLog({
+        action: "scan-folder",
+        success: true,
+        message: `Scanned ${sourcePath}: found ${videoFiles.length} video files, ${results.length} new`,
+      });
+
+      res.json({ 
+        scanned: videoFiles.length, 
+        newItems: results.length, 
+        items: results 
+      });
+    } catch (error) {
+      console.error("Scan folder error:", error);
+      res.status(500).json({ error: "Failed to scan folder" });
+    }
+  });
+
   // Organization preview endpoint
   app.get("/api/organize/preview", async (req, res) => {
     try {
