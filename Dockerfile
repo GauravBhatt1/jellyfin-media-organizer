@@ -9,7 +9,7 @@ COPY package*.json ./
 # Install all dependencies
 RUN npm ci
 
-# Copy source code
+# Copy all source code including script folder
 COPY . .
 
 # Build the application
@@ -30,7 +30,7 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/dist ./dist
 
 # Create media directories
-RUN mkdir -p /media/inbox /media/movies /media/tvshows
+RUN mkdir -p /mnt /media /data
 
 # Expose port
 EXPOSE 5000
