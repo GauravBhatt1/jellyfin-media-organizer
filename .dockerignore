@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.local
+dist
+*.md
+!DEPLOYMENT.md
+.replit
+replit.nix
+.upm
+.config
+attached_assets
