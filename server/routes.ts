@@ -298,28 +298,47 @@ export async function registerRoutes(
     }
   });
 
-  // Scan actual files from source folder (library scan)
+  // Scan actual files from all library folders
   app.post("/api/scan-folder", async (req, res) => {
     try {
       const settings = await storage.getAllSettings();
-      const sourcePath = settings.sourcePath || "/Inbox";
-      const moviesPath = settings.moviesPath || "/Movies";
-      const tvShowsPath = settings.tvShowsPath || "/TV Shows";
+      
+      // Parse paths - support both old single path and new array format
+      let moviesPaths: string[] = [];
+      let tvShowsPaths: string[] = [];
+      
+      if (settings.moviesPaths) {
+        try {
+          moviesPaths = JSON.parse(settings.moviesPaths);
+        } catch {
+          moviesPaths = [settings.moviesPaths];
+        }
+      } else if (settings.moviesPath) {
+        moviesPaths = [settings.moviesPath];
+      }
+      
+      if (settings.tvShowsPaths) {
+        try {
+          tvShowsPaths = JSON.parse(settings.tvShowsPaths);
+        } catch {
+          tvShowsPaths = [settings.tvShowsPaths];
+        }
+      } else if (settings.tvShowsPath) {
+        tvShowsPaths = [settings.tvShowsPath];
+      }
+      
+      // Combine all paths to scan
+      const allPaths = [...moviesPaths, ...tvShowsPaths].filter(p => p && p.trim());
+      
+      if (allPaths.length === 0) {
+        return res.status(400).json({ 
+          error: "No library folders configured. Please add folders in Settings." 
+        });
+      }
 
       // In Docker, VPS root is mounted at /host
       const HOST_PREFIX = "/host";
       const isDocker = fs.existsSync(HOST_PREFIX);
-      
-      const actualSourcePath = isDocker 
-        ? HOST_PREFIX + sourcePath 
-        : sourcePath;
-
-      // Check if source folder exists
-      if (!fs.existsSync(actualSourcePath)) {
-        return res.status(400).json({ 
-          error: `Source folder not found: ${sourcePath}. Please set the correct path in Settings.` 
-        });
-      }
 
       // Video file extensions
       const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.webm', '.flv', '.ts', '.m2ts'];
@@ -345,54 +364,75 @@ export async function registerRoutes(
         return files;
       };
 
-      const videoFiles = findVideoFiles(actualSourcePath);
+      let totalVideoFiles = 0;
       const results = [];
+      const scannedPaths: string[] = [];
+      
+      // Default destination paths (first in each list)
+      const defaultMoviesPath = moviesPaths[0] || "/Movies";
+      const defaultTvShowsPath = tvShowsPaths[0] || "/TV Shows";
 
-      for (const filePath of videoFiles) {
-        const filename = path.basename(filePath);
-        
-        // Check if already scanned
-        const existing = await storage.getMediaItemByFilename(filename);
-        if (existing) continue;
+      for (const sourcePath of allPaths) {
+        const actualSourcePath = isDocker 
+          ? HOST_PREFIX + sourcePath 
+          : sourcePath;
 
-        const parsed = parseMediaFilename(filename);
-        const destinationPath = generateDestinationPath(parsed, parsed.detectedName, {
-          movies: moviesPath,
-          tvshows: tvShowsPath,
-        });
+        // Check if folder exists
+        if (!fs.existsSync(actualSourcePath)) {
+          continue; // Skip non-existent folders
+        }
 
-        // Convert back to user-facing path
-        const userPath = isDocker 
-          ? filePath.replace(HOST_PREFIX, '') 
-          : filePath;
+        scannedPaths.push(sourcePath);
+        const videoFiles = findVideoFiles(actualSourcePath);
+        totalVideoFiles += videoFiles.length;
 
-        const item = await storage.createMediaItem({
-          originalFilename: filename,
-          originalPath: userPath,
-          extension: parsed.extension,
-          detectedType: parsed.detectedType,
-          detectedName: parsed.detectedName,
-          cleanedName: parsed.cleanedName,
-          year: parsed.year,
-          season: parsed.season,
-          episode: parsed.episode,
-          status: "pending",
-          destinationPath,
-          confidence: parsed.confidence,
-        });
+        for (const filePath of videoFiles) {
+          const filename = path.basename(filePath);
+          
+          // Check if already scanned
+          const existing = await storage.getMediaItemByFilename(filename);
+          if (existing) continue;
 
-        results.push(item);
+          const parsed = parseMediaFilename(filename);
+          const destinationPath = generateDestinationPath(parsed, parsed.detectedName, {
+            movies: defaultMoviesPath,
+            tvshows: defaultTvShowsPath,
+          });
+
+          // Convert back to user-facing path
+          const userPath = isDocker 
+            ? filePath.replace(HOST_PREFIX, '') 
+            : filePath;
+
+          const item = await storage.createMediaItem({
+            originalFilename: filename,
+            originalPath: userPath,
+            extension: parsed.extension,
+            detectedType: parsed.detectedType,
+            detectedName: parsed.detectedName,
+            cleanedName: parsed.cleanedName,
+            year: parsed.year,
+            season: parsed.season,
+            episode: parsed.episode,
+            status: "pending",
+            destinationPath,
+            confidence: parsed.confidence,
+          });
+
+          results.push(item);
+        }
       }
 
       await storage.createLog({
         action: "scan-folder",
         success: true,
-        message: `Scanned ${sourcePath}: found ${videoFiles.length} video files, ${results.length} new`,
+        message: `Scanned ${scannedPaths.length} folders: found ${totalVideoFiles} video files, ${results.length} new`,
       });
 
       res.json({ 
-        scanned: videoFiles.length, 
-        newItems: results.length, 
+        scanned: totalVideoFiles, 
+        newItems: results.length,
+        foldersScanned: scannedPaths.length,
         items: results 
       });
     } catch (error) {
@@ -635,10 +675,34 @@ export async function registerRoutes(
   app.get("/api/settings", async (req, res) => {
     try {
       const settings = await storage.getAllSettings();
+      
+      // Parse array paths with backward compatibility
+      let moviesPaths: string[] = ["/Movies"];
+      let tvShowsPaths: string[] = ["/TV Shows"];
+      
+      if (settings.moviesPaths) {
+        try {
+          moviesPaths = JSON.parse(settings.moviesPaths);
+        } catch {
+          moviesPaths = [settings.moviesPaths];
+        }
+      } else if (settings.moviesPath) {
+        moviesPaths = [settings.moviesPath];
+      }
+      
+      if (settings.tvShowsPaths) {
+        try {
+          tvShowsPaths = JSON.parse(settings.tvShowsPaths);
+        } catch {
+          tvShowsPaths = [settings.tvShowsPaths];
+        }
+      } else if (settings.tvShowsPath) {
+        tvShowsPaths = [settings.tvShowsPath];
+      }
+      
       res.json({
-        sourcePath: settings.sourcePath || "/Inbox",
-        moviesPath: settings.moviesPath || "/Movies",
-        tvShowsPath: settings.tvShowsPath || "/TV Shows",
+        moviesPaths,
+        tvShowsPaths,
         autoOrganize: settings.autoOrganize === "true",
         removeReleaseGroups: settings.removeReleaseGroups !== "false",
         fuzzyMatchThreshold: parseInt(settings.fuzzyMatchThreshold || "80", 10),
@@ -652,18 +716,21 @@ export async function registerRoutes(
   app.post("/api/settings", async (req, res) => {
     try {
       const {
-        sourcePath,
-        moviesPath,
-        tvShowsPath,
+        moviesPaths,
+        tvShowsPaths,
         autoOrganize,
         removeReleaseGroups,
         fuzzyMatchThreshold,
         tmdbApiKey,
       } = req.body;
 
-      if (sourcePath) await storage.setSetting("sourcePath", sourcePath);
-      if (moviesPath) await storage.setSetting("moviesPath", moviesPath);
-      if (tvShowsPath) await storage.setSetting("tvShowsPath", tvShowsPath);
+      // Store arrays as JSON strings
+      if (moviesPaths !== undefined) {
+        await storage.setSetting("moviesPaths", JSON.stringify(moviesPaths));
+      }
+      if (tvShowsPaths !== undefined) {
+        await storage.setSetting("tvShowsPaths", JSON.stringify(tvShowsPaths));
+      }
       if (autoOrganize !== undefined)
         await storage.setSetting("autoOrganize", String(autoOrganize));
       if (removeReleaseGroups !== undefined)
