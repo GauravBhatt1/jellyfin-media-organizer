@@ -572,72 +572,76 @@ export async function registerRoutes(
     }
   });
 
-  // Folder browser endpoint - lists directories like Jellyfin
-  // SECURITY: Only allows browsing within media mount paths for self-hosted VPS
-  // Note: This app is designed to run on user's private VPS (like Jellyfin/Plex)
+  // Folder browser endpoint - Jellyfin-style folder picker
+  // Browses /host which maps to VPS root filesystem via Docker volume
+  // This app runs on user's private VPS (like Jellyfin/Plex)
   app.get("/api/folders", async (req, res) => {
     try {
       const requestedPath = (req.query.path as string) || "/";
       
-      // Media roots from environment variable (comma-separated) or defaults
-      // Example: MEDIA_ROOTS=/mnt/anime,/mnt/movies,/mnt/tvshows
-      const envRoots = process.env.MEDIA_ROOTS;
-      const MEDIA_ROOTS = envRoots 
-        ? envRoots.split(",").map(p => p.trim()).filter(p => p.startsWith("/"))
-        : ["/mnt", "/media", "/data", "/srv"];
+      // In Docker, VPS root is mounted at /host
+      // So /mnt on VPS = /host/mnt in container
+      const HOST_PREFIX = "/host";
+      const isDocker = fs.existsSync(HOST_PREFIX);
 
       // Normalize path to prevent traversal attacks
       const normalizedPath = path.normalize(requestedPath).replace(/\/+$/, "") || "/";
 
       // Strict check: path must not contain traversal patterns
-      if (normalizedPath.includes("..") || normalizedPath.includes("./")) {
+      if (normalizedPath.includes("..")) {
         return res.status(403).json({ error: "Invalid path" });
       }
 
-      // If root path requested, return media mount points only
+      // Convert user-facing path to actual filesystem path
+      const actualPath = isDocker 
+        ? (normalizedPath === "/" ? HOST_PREFIX : HOST_PREFIX + normalizedPath)
+        : normalizedPath;
+
+      // If root path requested, list top-level directories
       if (normalizedPath === "/" || normalizedPath === "") {
-        const availablePaths: { name: string; path: string; isDirectory: boolean }[] = [];
+        const items: { name: string; path: string; isDirectory: boolean }[] = [];
         
-        for (const p of MEDIA_ROOTS) {
-          try {
-            if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
-              availablePaths.push({
-                name: path.basename(p) || p,
-                path: p,
-                isDirectory: true,
-              });
-            }
-          } catch {}
+        try {
+          const rootPath = isDocker ? HOST_PREFIX : "/";
+          const entries = fs.readdirSync(rootPath, { withFileTypes: true });
+          
+          for (const entry of entries) {
+            // Skip hidden files and system directories
+            if (entry.name.startsWith(".")) continue;
+            if (["proc", "sys", "dev", "run", "snap", "boot", "lost+found"].includes(entry.name)) continue;
+            if (!entry.isDirectory()) continue;
+            
+            items.push({
+              name: entry.name,
+              path: "/" + entry.name,
+              isDirectory: true,
+            });
+          }
+        } catch (e) {
+          console.error("Error reading root:", e);
         }
+        
+        items.sort((a, b) => a.name.localeCompare(b.name));
         
         return res.json({
           currentPath: "/",
           parent: null,
-          items: availablePaths,
+          items,
         });
       }
 
-      // Verify path is under a media root
-      const isUnderMediaRoot = MEDIA_ROOTS.some(
-        root => normalizedPath === root || normalizedPath.startsWith(root + "/")
-      );
-
-      if (!isUnderMediaRoot) {
-        return res.status(403).json({ error: "Access denied - path must be under media mount" });
-      }
-
       // Validate path exists
-      if (!fs.existsSync(normalizedPath)) {
+      if (!fs.existsSync(actualPath)) {
         return res.status(404).json({ error: "Path not found" });
       }
 
-      const stat = fs.statSync(normalizedPath);
+      const stat = fs.statSync(actualPath);
       if (!stat.isDirectory()) {
         return res.status(400).json({ error: "Not a directory" });
       }
 
       // Read directory contents - only show directories (for folder selection)
-      const entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
+      const entries = fs.readdirSync(actualPath, { withFileTypes: true });
       const items: { name: string; path: string; isDirectory: boolean }[] = [];
 
       for (const entry of entries) {
@@ -660,18 +664,14 @@ export async function registerRoutes(
       items.sort((a, b) => a.name.localeCompare(b.name));
 
       const parentPath = path.dirname(normalizedPath);
-      
-      // Only allow going up if still under media root
-      const canGoUp = MEDIA_ROOTS.some(
-        root => parentPath === root || parentPath.startsWith(root + "/")
-      ) || parentPath === "/";
 
       res.json({
         currentPath: normalizedPath,
-        parent: canGoUp && parentPath !== normalizedPath ? parentPath : null,
+        parent: parentPath !== normalizedPath ? parentPath : null,
         items,
       });
     } catch (error) {
+      console.error("Folder browse error:", error);
       res.status(500).json({ error: "Failed to browse folders" });
     }
   });
