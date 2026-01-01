@@ -12,6 +12,9 @@ RUN npm ci --legacy-peer-deps
 # Copy all source code
 COPY . .
 
+# Increase Node memory for build (VPS may have limited RAM)
+ENV NODE_OPTIONS="--max-old-space-size=2048"
+
 # Build the application
 RUN npm run build
 
