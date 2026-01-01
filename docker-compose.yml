@@ -15,14 +15,8 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY}
       - MEDIA_ROOTS=${MEDIA_ROOTS:-/mnt,/media,/data,/srv}
     volumes:
-      # Mount your media directories here - must match MEDIA_ROOTS paths
-      # Example: If MEDIA_ROOTS=/mnt/anime,/mnt/movies then add:
-      # - /mnt/anime:/mnt/anime:rw
-      # - /mnt/movies:/mnt/movies:rw
-      - /mnt:/mnt:rw
-      - /media:/media:rw
-      - /data:/data:rw
-      - /srv:/srv:rw
+      # Mount entire filesystem for Jellyfin-like folder browsing
+      - /:/host:rw
     depends_on:
       db:
         condition: service_healthy
