@@ -79,6 +79,28 @@ export default function Scanner() {
     },
   });
 
+  const scanFolderMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/scan-folder", {});
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      toast({
+        title: "Library Scan Complete",
+        description: `Found ${data.scanned} video files, ${data.newItems} new items added.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Scan Failed",
+        description: error.message || "Could not scan the source folder.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       return apiRequest("DELETE", `/api/media-items/${id}`);
@@ -148,16 +170,34 @@ export default function Scanner() {
         <div>
           <h1 className="text-2xl font-bold" data-testid="text-scanner-title">File Scanner</h1>
           <p className="text-muted-foreground">
-            Scan and detect media files from your uploads
+            Scan and detect media files from your source folder
           </p>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button data-testid="button-add-files">
-              <Upload className="h-4 w-4 mr-2" />
-              Add Files
-            </Button>
-          </DialogTrigger>
+        <div className="flex flex-wrap gap-2">
+          <Button 
+            onClick={() => scanFolderMutation.mutate()}
+            disabled={scanFolderMutation.isPending}
+            data-testid="button-scan-library"
+          >
+            {scanFolderMutation.isPending ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Scanning...
+              </>
+            ) : (
+              <>
+                <FolderSearch className="h-4 w-4 mr-2" />
+                Scan Library
+              </>
+            )}
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" data-testid="button-add-files">
+                <Upload className="h-4 w-4 mr-2" />
+                Add Manual
+              </Button>
+            </DialogTrigger>
           <DialogContent className="sm:max-w-[600px]">
             <DialogHeader>
               <DialogTitle>Add Files to Scan</DialogTitle>
@@ -206,7 +246,8 @@ Breaking.Bad.Season.3.Episode.5.mp4"
               </Button>
             </DialogFooter>
           </DialogContent>
-        </Dialog>
+          </Dialog>
+        </div>
       </div>
 
       <Card>
