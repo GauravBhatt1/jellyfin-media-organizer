@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: jellyfin-media-organizer
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - DATABASE_URL=postgresql://jellyfin:jellyfin123@db:5432/jellyfin_media
+      - SESSION_SECRET=${SESSION_SECRET:-your-super-secret-session-key-change-this}
+    volumes:
+      # Mount your media directories here
+      - ${SOURCE_PATH:-./media/inbox}:/media/inbox
+      - ${MOVIES_PATH:-./media/movies}:/media/movies
+      - ${TV_SHOWS_PATH:-./media/tvshows}:/media/tvshows
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - jellyfin-network
+
+  db:
+    image: postgres:16-alpine
+    container_name: jellyfin-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=jellyfin
+      - POSTGRES_PASSWORD=jellyfin123
+      - POSTGRES_DB=jellyfin_media
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jellyfin -d jellyfin_media"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jellyfin-network
+
+volumes:
+  postgres_data:
+
+networks:
+  jellyfin-network:
+    driver: bridge
