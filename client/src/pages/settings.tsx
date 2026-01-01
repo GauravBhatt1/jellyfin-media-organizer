@@ -8,7 +8,6 @@ import {
   Film,
   Loader2,
   AlertCircle,
-  FolderOpen,
   Search,
   Key,
   Eye,
@@ -25,7 +24,6 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { FolderPicker } from "@/components/folder-picker";
 
 interface AppSettings {
-  sourcePath: string;
   moviesPath: string;
   tvShowsPath: string;
   autoOrganize: boolean;
@@ -35,7 +33,6 @@ interface AppSettings {
 }
 
 const defaultSettings: AppSettings = {
-  sourcePath: "/Inbox",
   moviesPath: "/Movies",
   tvShowsPath: "/TV Shows",
   autoOrganize: false,
@@ -44,7 +41,7 @@ const defaultSettings: AppSettings = {
   tmdbApiKey: "",
 };
 
-type FolderPickerTarget = "source" | "movies" | "tvshows" | null;
+type FolderPickerTarget = "movies" | "tvshows" | null;
 
 export default function Settings() {
   const { toast } = useToast();
@@ -100,9 +97,7 @@ export default function Settings() {
   };
 
   const handleFolderSelect = (path: string) => {
-    if (pickerTarget === "source") {
-      updateSetting("sourcePath", path);
-    } else if (pickerTarget === "movies") {
+    if (pickerTarget === "movies") {
       updateSetting("moviesPath", path);
     } else if (pickerTarget === "tvshows") {
       updateSetting("tvShowsPath", path);
@@ -112,8 +107,6 @@ export default function Settings() {
 
   const getPickerTitle = () => {
     switch (pickerTarget) {
-      case "source":
-        return "Select Source Folder (Inbox)";
       case "movies":
         return "Select Movies Folder";
       case "tvshows":
@@ -125,8 +118,6 @@ export default function Settings() {
 
   const getInitialPath = () => {
     switch (pickerTarget) {
-      case "source":
-        return settings.sourcePath || "/";
       case "movies":
         return settings.moviesPath || "/";
       case "tvshows":
@@ -171,36 +162,6 @@ export default function Settings() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="sourcePath" className="flex items-center gap-2">
-                <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                Source Folder (Upload Inbox)
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  id="sourcePath"
-                  value={settings.sourcePath}
-                  onChange={(e) => updateSetting("sourcePath", e.target.value)}
-                  placeholder="/path/to/inbox"
-                  className="flex-1"
-                  data-testid="input-source-path"
-                />
-                <Button
-                  variant="outline"
-                  onClick={() => openFolderPicker("source")}
-                  data-testid="button-browse-source"
-                >
-                  <Search className="h-4 w-4 mr-2" />
-                  Browse
-                </Button>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Where Telegram mirror bot uploads files (via Rclone)
-              </p>
-            </div>
-
-            <Separator />
-
             <div className="space-y-2">
               <Label htmlFor="moviesPath" className="flex items-center gap-2">
                 <Film className="h-4 w-4 text-blue-500" />
