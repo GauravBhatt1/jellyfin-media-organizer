@@ -18,6 +18,8 @@ services:
       - /mnt:/mnt:rw
       - /media:/media:rw
       - /data:/data:rw
+      - /srv:/srv:rw
+      - /home/ubuntu:/home/ubuntu:rw
     depends_on:
       db:
         condition: service_healthy
