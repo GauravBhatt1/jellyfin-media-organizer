@@ -1,8 +1,6 @@
-import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   FolderSearch,
-  Upload,
   FileVideo,
   Film,
   Tv,
@@ -16,11 +14,8 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Progress } from "@/components/ui/progress";
 import {
   Table,
   TableBody,
@@ -29,15 +24,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -49,34 +35,9 @@ import type { MediaItem } from "@shared/schema";
 
 export default function Scanner() {
   const { toast } = useToast();
-  const [filenames, setFilenames] = useState("");
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
 
   const { data: items, isLoading } = useQuery<MediaItem[]>({
     queryKey: ["/api/media-items"],
-  });
-
-  const scanMutation = useMutation({
-    mutationFn: async (filenames: string[]) => {
-      return apiRequest("POST", "/api/scan", { filenames });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      setFilenames("");
-      setIsDialogOpen(false);
-      toast({
-        title: "Scan Complete",
-        description: "Files have been scanned and parsed successfully.",
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Scan Failed",
-        description: "There was an error scanning the files.",
-        variant: "destructive",
-      });
-    },
   });
 
   const scanFolderMutation = useMutation({
@@ -114,24 +75,6 @@ export default function Scanner() {
       });
     },
   });
-
-  const handleScan = () => {
-    const lines = filenames
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-    
-    if (lines.length === 0) {
-      toast({
-        title: "No Files",
-        description: "Please enter at least one filename to scan.",
-        variant: "destructive",
-      });
-      return;
-    }
-    
-    scanMutation.mutate(lines);
-  };
 
   const getTypeIcon = (type: string) => {
     switch (type) {
@@ -173,81 +116,23 @@ export default function Scanner() {
             Scan and detect media files from your source folder
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button 
-            onClick={() => scanFolderMutation.mutate()}
-            disabled={scanFolderMutation.isPending}
-            data-testid="button-scan-library"
-          >
-            {scanFolderMutation.isPending ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                Scanning...
-              </>
-            ) : (
-              <>
-                <FolderSearch className="h-4 w-4 mr-2" />
-                Scan Library
-              </>
-            )}
-          </Button>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button variant="outline" data-testid="button-add-files">
-                <Upload className="h-4 w-4 mr-2" />
-                Add Manual
-              </Button>
-            </DialogTrigger>
-          <DialogContent className="sm:max-w-[600px]">
-            <DialogHeader>
-              <DialogTitle>Add Files to Scan</DialogTitle>
-              <DialogDescription>
-                Enter filenames (one per line) that you want to scan and organize.
-                These simulate files uploaded via Telegram mirror bot.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="py-4">
-              <Textarea
-                placeholder="Example:
-Mirzapur.S01E01.720p.WEB-DL.x264.mkv
-The.Office.S02E05.HDHub4u.1080p.mp4
-Inception.2010.1080p.BluRay.x264.mkv
-Breaking.Bad.Season.3.Episode.5.mp4"
-                value={filenames}
-                onChange={(e) => setFilenames(e.target.value)}
-                className="min-h-[200px] font-mono text-sm"
-                data-testid="input-filenames"
-              />
-              <p className="text-xs text-muted-foreground mt-2">
-                The scanner will automatically detect if each file is a movie or TV show,
-                extract the name, year, season, and episode information.
-              </p>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleScan}
-                disabled={scanMutation.isPending}
-                data-testid="button-scan"
-              >
-                {scanMutation.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Scanning...
-                  </>
-                ) : (
-                  <>
-                    <FolderSearch className="h-4 w-4 mr-2" />
-                    Scan Files
-                  </>
-                )}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-          </Dialog>
-        </div>
+        <Button 
+          onClick={() => scanFolderMutation.mutate()}
+          disabled={scanFolderMutation.isPending}
+          data-testid="button-scan-library"
+        >
+          {scanFolderMutation.isPending ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Scanning...
+            </>
+          ) : (
+            <>
+              <FolderSearch className="h-4 w-4 mr-2" />
+              Scan Library
+            </>
+          )}
+        </Button>
       </div>
 
       <Card>
