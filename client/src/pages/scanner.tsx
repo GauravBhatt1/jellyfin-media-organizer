@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Progress } from "@/components/ui/progress";
 import {
   Table,
   TableBody,
@@ -260,12 +261,20 @@ export default function Scanner() {
               </div>
               <h3 className="text-lg font-semibold mb-2">No Files Scanned</h3>
               <p className="text-sm text-muted-foreground max-w-sm mb-4">
-                Add filenames to scan and detect media information. The scanner
-                will parse movie names, TV show episodes, and more.
+                Click Scan Library to detect media files from your configured folders.
+                The scanner will parse movie names, TV show episodes, and more.
               </p>
-              <Button onClick={() => setIsDialogOpen(true)} data-testid="button-add-first">
-                <Upload className="h-4 w-4 mr-2" />
-                Add Your First Files
+              <Button 
+                onClick={() => scanFolderMutation.mutate()}
+                disabled={scanFolderMutation.isPending}
+                data-testid="button-scan-first"
+              >
+                {scanFolderMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <FolderSearch className="h-4 w-4 mr-2" />
+                )}
+                Scan Library
               </Button>
             </div>
           )}
