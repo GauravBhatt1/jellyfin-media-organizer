@@ -12,11 +12,12 @@ services:
       - PORT=5000
       - DATABASE_URL=postgresql://jellyfin:jellyfin123@db:5432/jellyfin_media
       - SESSION_SECRET=${SESSION_SECRET:-your-super-secret-session-key-change-this}
+      - TMDB_API_KEY=${TMDB_API_KEY}
     volumes:
-      # Mount your media directories here
-      - ${SOURCE_PATH:-./media/inbox}:/media/inbox
-      - ${MOVIES_PATH:-./media/movies}:/media/movies
-      - ${TV_SHOWS_PATH:-./media/tvshows}:/media/tvshows
+      # Mount your Rclone media directories - app will browse these via folder picker
+      - /mnt:/mnt:rw
+      - /media:/media:rw
+      - /data:/data:rw
     depends_on:
       db:
         condition: service_healthy
