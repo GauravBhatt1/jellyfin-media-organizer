@@ -6,14 +6,20 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install all dependencies
+# Install all dependencies including devDependencies
 RUN npm ci
 
-# Copy all source code including script folder
-COPY . .
+# Copy source code
+COPY client ./client
+COPY server ./server
+COPY shared ./shared
+COPY script ./script
+COPY vite.config.ts tsconfig.json tailwind.config.ts postcss.config.js index.html ./
+COPY drizzle.config.ts ./
+COPY theme.json ./
 
-# Build the application
-RUN npm run build
+# Build the application using node directly
+RUN node --import tsx script/build.ts
 
 # Production stage
 FROM node:20-alpine AS runner
@@ -39,9 +45,5 @@ EXPOSE 5000
 ENV NODE_ENV=production
 ENV PORT=5000
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:5000/api/stats || exit 1
-
 # Start the application
-CMD ["npm", "run", "start"]
+CMD ["node", "dist/index.cjs"]
