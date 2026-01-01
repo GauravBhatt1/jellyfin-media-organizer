@@ -9,16 +9,10 @@ COPY package*.json ./
 # Install all dependencies including devDependencies
 RUN npm ci
 
-# Copy source code
-COPY client ./client
-COPY server ./server
-COPY shared ./shared
-COPY script ./script
-COPY vite.config.ts tsconfig.json tailwind.config.ts postcss.config.js index.html ./
-COPY drizzle.config.ts ./
-COPY theme.json ./
+# Copy all source code
+COPY . .
 
-# Build the application using node directly
+# Build the application
 RUN node --import tsx script/build.ts
 
 # Production stage
