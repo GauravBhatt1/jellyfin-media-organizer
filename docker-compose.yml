@@ -13,8 +13,12 @@ services:
       - DATABASE_URL=postgresql://jellyfin:jellyfin123@db:5432/jellyfin_media
       - SESSION_SECRET=${SESSION_SECRET:-your-super-secret-session-key-change-this}
       - TMDB_API_KEY=${TMDB_API_KEY}
+      - MEDIA_ROOTS=${MEDIA_ROOTS:-/mnt,/media,/data,/srv}
     volumes:
-      # Mount your Rclone media directories - add your Rclone mount paths here
+      # Mount your media directories here - must match MEDIA_ROOTS paths
+      # Example: If MEDIA_ROOTS=/mnt/anime,/mnt/movies then add:
+      # - /mnt/anime:/mnt/anime:rw
+      # - /mnt/movies:/mnt/movies:rw
       - /mnt:/mnt:rw
       - /media:/media:rw
       - /data:/data:rw
