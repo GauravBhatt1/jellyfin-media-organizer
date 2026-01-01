@@ -539,6 +539,7 @@ export async function registerRoutes(
         autoOrganize: settings.autoOrganize === "true",
         removeReleaseGroups: settings.removeReleaseGroups !== "false",
         fuzzyMatchThreshold: parseInt(settings.fuzzyMatchThreshold || "80", 10),
+        tmdbApiKey: settings.tmdbApiKey || "",
       });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch settings" });
@@ -554,6 +555,7 @@ export async function registerRoutes(
         autoOrganize,
         removeReleaseGroups,
         fuzzyMatchThreshold,
+        tmdbApiKey,
       } = req.body;
 
       if (sourcePath) await storage.setSetting("sourcePath", sourcePath);
@@ -565,6 +567,8 @@ export async function registerRoutes(
         await storage.setSetting("removeReleaseGroups", String(removeReleaseGroups));
       if (fuzzyMatchThreshold !== undefined)
         await storage.setSetting("fuzzyMatchThreshold", String(fuzzyMatchThreshold));
+      if (tmdbApiKey !== undefined)
+        await storage.setSetting("tmdbApiKey", tmdbApiKey);
 
       res.json({ success: true });
     } catch (error) {
@@ -676,11 +680,19 @@ export async function registerRoutes(
     }
   });
 
+  // Helper to get TMDB API key (env var takes priority, then settings)
+  const getTmdbApiKey = async (): Promise<string | null> => {
+    if (TMDB_API_KEY) return TMDB_API_KEY;
+    const settings = await storage.getAllSettings();
+    return settings.tmdbApiKey || null;
+  };
+
   // TMDB search endpoints
   app.get("/api/tmdb/search/movie", async (req, res) => {
     try {
-      if (!TMDB_API_KEY) {
-        return res.status(400).json({ error: "TMDB API key not configured" });
+      const apiKey = await getTmdbApiKey();
+      if (!apiKey) {
+        return res.status(400).json({ error: "TMDB API key not configured. Set it in Settings." });
       }
 
       const query = req.query.query as string;
@@ -690,7 +702,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Query required" });
       }
 
-      let url = `${TMDB_BASE_URL}/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`;
+      let url = `${TMDB_BASE_URL}/search/movie?api_key=${apiKey}&query=${encodeURIComponent(query)}`;
       if (year) url += `&year=${year}`;
 
       const response = await fetch(url);
@@ -714,8 +726,9 @@ export async function registerRoutes(
 
   app.get("/api/tmdb/search/tv", async (req, res) => {
     try {
-      if (!TMDB_API_KEY) {
-        return res.status(400).json({ error: "TMDB API key not configured" });
+      const apiKey = await getTmdbApiKey();
+      if (!apiKey) {
+        return res.status(400).json({ error: "TMDB API key not configured. Set it in Settings." });
       }
 
       const query = req.query.query as string;
@@ -725,7 +738,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Query required" });
       }
 
-      let url = `${TMDB_BASE_URL}/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`;
+      let url = `${TMDB_BASE_URL}/search/tv?api_key=${apiKey}&query=${encodeURIComponent(query)}`;
       if (year) url += `&first_air_date_year=${year}`;
 
       const response = await fetch(url);
@@ -749,11 +762,12 @@ export async function registerRoutes(
 
   app.get("/api/tmdb/movie/:id", async (req, res) => {
     try {
-      if (!TMDB_API_KEY) {
-        return res.status(400).json({ error: "TMDB API key not configured" });
+      const apiKey = await getTmdbApiKey();
+      if (!apiKey) {
+        return res.status(400).json({ error: "TMDB API key not configured. Set it in Settings." });
       }
 
-      const url = `${TMDB_BASE_URL}/movie/${req.params.id}?api_key=${TMDB_API_KEY}`;
+      const url = `${TMDB_BASE_URL}/movie/${req.params.id}?api_key=${apiKey}`;
       const response = await fetch(url);
       const m = await response.json();
 
@@ -776,11 +790,12 @@ export async function registerRoutes(
 
   app.get("/api/tmdb/tv/:id", async (req, res) => {
     try {
-      if (!TMDB_API_KEY) {
-        return res.status(400).json({ error: "TMDB API key not configured" });
+      const apiKey = await getTmdbApiKey();
+      if (!apiKey) {
+        return res.status(400).json({ error: "TMDB API key not configured. Set it in Settings." });
       }
 
-      const url = `${TMDB_BASE_URL}/tv/${req.params.id}?api_key=${TMDB_API_KEY}`;
+      const url = `${TMDB_BASE_URL}/tv/${req.params.id}?api_key=${apiKey}`;
       const response = await fetch(url);
       const t = await response.json();
 
