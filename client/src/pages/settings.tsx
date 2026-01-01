@@ -6,11 +6,13 @@ import {
   Folder,
   Tv,
   Film,
-  RefreshCw,
   Loader2,
-  Check,
   AlertCircle,
   FolderOpen,
+  Search,
+  Key,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +22,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { FolderPicker } from "@/components/folder-picker";
 
 interface AppSettings {
   sourcePath: string;
@@ -28,6 +31,7 @@ interface AppSettings {
   autoOrganize: boolean;
   removeReleaseGroups: boolean;
   fuzzyMatchThreshold: number;
+  tmdbApiKey: string;
 }
 
 const defaultSettings: AppSettings = {
@@ -37,11 +41,17 @@ const defaultSettings: AppSettings = {
   autoOrganize: false,
   removeReleaseGroups: true,
   fuzzyMatchThreshold: 80,
+  tmdbApiKey: "",
 };
+
+type FolderPickerTarget = "source" | "movies" | "tvshows" | null;
 
 export default function Settings() {
   const { toast } = useToast();
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
+  const [folderPickerOpen, setFolderPickerOpen] = useState(false);
+  const [pickerTarget, setPickerTarget] = useState<FolderPickerTarget>(null);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   const { data: savedSettings, isLoading } = useQuery<AppSettings>({
     queryKey: ["/api/settings"],
@@ -84,6 +94,48 @@ export default function Settings() {
     setSettings((prev) => ({ ...prev, [key]: value }));
   };
 
+  const openFolderPicker = (target: FolderPickerTarget) => {
+    setPickerTarget(target);
+    setFolderPickerOpen(true);
+  };
+
+  const handleFolderSelect = (path: string) => {
+    if (pickerTarget === "source") {
+      updateSetting("sourcePath", path);
+    } else if (pickerTarget === "movies") {
+      updateSetting("moviesPath", path);
+    } else if (pickerTarget === "tvshows") {
+      updateSetting("tvShowsPath", path);
+    }
+    setPickerTarget(null);
+  };
+
+  const getPickerTitle = () => {
+    switch (pickerTarget) {
+      case "source":
+        return "Select Source Folder (Inbox)";
+      case "movies":
+        return "Select Movies Folder";
+      case "tvshows":
+        return "Select TV Shows Folder";
+      default:
+        return "Select Folder";
+    }
+  };
+
+  const getInitialPath = () => {
+    switch (pickerTarget) {
+      case "source":
+        return settings.sourcePath || "/";
+      case "movies":
+        return settings.moviesPath || "/";
+      case "tvshows":
+        return settings.tvShowsPath || "/";
+      default:
+        return "/";
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -115,7 +167,7 @@ export default function Settings() {
               Folder Paths
             </CardTitle>
             <CardDescription>
-              Set the source and destination folders for media organization
+              Click "Browse" to select folders visually, or type the path manually
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -124,13 +176,24 @@ export default function Settings() {
                 <FolderOpen className="h-4 w-4 text-muted-foreground" />
                 Source Folder (Upload Inbox)
               </Label>
-              <Input
-                id="sourcePath"
-                value={settings.sourcePath}
-                onChange={(e) => updateSetting("sourcePath", e.target.value)}
-                placeholder="/path/to/inbox"
-                data-testid="input-source-path"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="sourcePath"
+                  value={settings.sourcePath}
+                  onChange={(e) => updateSetting("sourcePath", e.target.value)}
+                  placeholder="/path/to/inbox"
+                  className="flex-1"
+                  data-testid="input-source-path"
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => openFolderPicker("source")}
+                  data-testid="button-browse-source"
+                >
+                  <Search className="h-4 w-4 mr-2" />
+                  Browse
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Where Telegram mirror bot uploads files (via Rclone)
               </p>
@@ -143,13 +206,24 @@ export default function Settings() {
                 <Film className="h-4 w-4 text-blue-500" />
                 Movies Folder
               </Label>
-              <Input
-                id="moviesPath"
-                value={settings.moviesPath}
-                onChange={(e) => updateSetting("moviesPath", e.target.value)}
-                placeholder="/path/to/Movies"
-                data-testid="input-movies-path"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="moviesPath"
+                  value={settings.moviesPath}
+                  onChange={(e) => updateSetting("moviesPath", e.target.value)}
+                  placeholder="/path/to/Movies"
+                  className="flex-1"
+                  data-testid="input-movies-path"
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => openFolderPicker("movies")}
+                  data-testid="button-browse-movies"
+                >
+                  <Search className="h-4 w-4 mr-2" />
+                  Browse
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Jellyfin-compatible movies folder
               </p>
@@ -160,13 +234,24 @@ export default function Settings() {
                 <Tv className="h-4 w-4 text-purple-500" />
                 TV Shows Folder
               </Label>
-              <Input
-                id="tvShowsPath"
-                value={settings.tvShowsPath}
-                onChange={(e) => updateSetting("tvShowsPath", e.target.value)}
-                placeholder="/path/to/TV Shows"
-                data-testid="input-tvshows-path"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="tvShowsPath"
+                  value={settings.tvShowsPath}
+                  onChange={(e) => updateSetting("tvShowsPath", e.target.value)}
+                  placeholder="/path/to/TV Shows"
+                  className="flex-1"
+                  data-testid="input-tvshows-path"
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => openFolderPicker("tvshows")}
+                  data-testid="button-browse-tvshows"
+                >
+                  <Search className="h-4 w-4 mr-2" />
+                  Browse
+                </Button>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Jellyfin-compatible TV shows folder
               </p>
@@ -243,6 +328,57 @@ export default function Settings() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
+              <Key className="h-5 w-5 text-amber-500" />
+              TMDB API Settings
+            </CardTitle>
+            <CardDescription>
+              Get your free API key from themoviedb.org for movie/TV metadata
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="tmdbApiKey">TMDB API Key</Label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Input
+                    id="tmdbApiKey"
+                    type={showApiKey ? "text" : "password"}
+                    value={settings.tmdbApiKey}
+                    onChange={(e) => updateSetting("tmdbApiKey", e.target.value)}
+                    placeholder="Enter your TMDB API key"
+                    className="pr-10"
+                    data-testid="input-tmdb-api-key"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-0 top-0 h-full"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    data-testid="button-toggle-api-key"
+                  >
+                    {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Get your free API key at{" "}
+                <a
+                  href="https://www.themoviedb.org/settings/api"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline"
+                >
+                  themoviedb.org/settings/api
+                </a>
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-yellow-500" />
               File Naming Convention
             </CardTitle>
@@ -276,6 +412,14 @@ export default function Settings() {
           </CardContent>
         </Card>
       </div>
+
+      <FolderPicker
+        open={folderPickerOpen}
+        onOpenChange={setFolderPickerOpen}
+        onSelect={handleFolderSelect}
+        title={getPickerTitle()}
+        initialPath={getInitialPath()}
+      />
     </div>
   );
 }
