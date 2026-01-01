@@ -2,6 +2,11 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { RELEASE_GROUPS, type MediaType } from "@shared/schema";
+import * as fs from "fs";
+import * as path from "path";
+
+const TMDB_API_KEY = process.env.TMDB_API_KEY;
+const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 
 // Helper functions for parsing filenames
 function cleanFilename(filename: string): string {
@@ -564,6 +569,236 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save settings" });
+    }
+  });
+
+  // Folder browser endpoint - lists directories like Jellyfin
+  // SECURITY: Only allows browsing within media mount paths for self-hosted VPS
+  // Note: This app is designed to run on user's private VPS (like Jellyfin/Plex)
+  app.get("/api/folders", async (req, res) => {
+    try {
+      const requestedPath = (req.query.path as string) || "/";
+      
+      // Media roots from environment variable (comma-separated) or defaults
+      // Example: MEDIA_ROOTS=/mnt/anime,/mnt/movies,/mnt/tvshows
+      const envRoots = process.env.MEDIA_ROOTS;
+      const MEDIA_ROOTS = envRoots 
+        ? envRoots.split(",").map(p => p.trim()).filter(p => p.startsWith("/"))
+        : ["/mnt", "/media", "/data", "/srv"];
+
+      // Normalize path to prevent traversal attacks
+      const normalizedPath = path.normalize(requestedPath).replace(/\/+$/, "") || "/";
+
+      // Strict check: path must not contain traversal patterns
+      if (normalizedPath.includes("..") || normalizedPath.includes("./")) {
+        return res.status(403).json({ error: "Invalid path" });
+      }
+
+      // If root path requested, return media mount points only
+      if (normalizedPath === "/" || normalizedPath === "") {
+        const availablePaths: { name: string; path: string; isDirectory: boolean }[] = [];
+        
+        for (const p of MEDIA_ROOTS) {
+          try {
+            if (fs.existsSync(p) && fs.statSync(p).isDirectory()) {
+              availablePaths.push({
+                name: path.basename(p) || p,
+                path: p,
+                isDirectory: true,
+              });
+            }
+          } catch {}
+        }
+        
+        return res.json({
+          currentPath: "/",
+          parent: null,
+          items: availablePaths,
+        });
+      }
+
+      // Verify path is under a media root
+      const isUnderMediaRoot = MEDIA_ROOTS.some(
+        root => normalizedPath === root || normalizedPath.startsWith(root + "/")
+      );
+
+      if (!isUnderMediaRoot) {
+        return res.status(403).json({ error: "Access denied - path must be under media mount" });
+      }
+
+      // Validate path exists
+      if (!fs.existsSync(normalizedPath)) {
+        return res.status(404).json({ error: "Path not found" });
+      }
+
+      const stat = fs.statSync(normalizedPath);
+      if (!stat.isDirectory()) {
+        return res.status(400).json({ error: "Not a directory" });
+      }
+
+      // Read directory contents - only show directories (for folder selection)
+      const entries = fs.readdirSync(normalizedPath, { withFileTypes: true });
+      const items: { name: string; path: string; isDirectory: boolean }[] = [];
+
+      for (const entry of entries) {
+        // Skip hidden files
+        if (entry.name.startsWith(".")) continue;
+        // Only show directories for folder picker
+        if (!entry.isDirectory()) continue;
+        
+        try {
+          const fullPath = path.join(normalizedPath, entry.name);
+          items.push({
+            name: entry.name,
+            path: fullPath,
+            isDirectory: true,
+          });
+        } catch {}
+      }
+
+      // Sort alphabetically
+      items.sort((a, b) => a.name.localeCompare(b.name));
+
+      const parentPath = path.dirname(normalizedPath);
+      
+      // Only allow going up if still under media root
+      const canGoUp = MEDIA_ROOTS.some(
+        root => parentPath === root || parentPath.startsWith(root + "/")
+      ) || parentPath === "/";
+
+      res.json({
+        currentPath: normalizedPath,
+        parent: canGoUp && parentPath !== normalizedPath ? parentPath : null,
+        items,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to browse folders" });
+    }
+  });
+
+  // TMDB search endpoints
+  app.get("/api/tmdb/search/movie", async (req, res) => {
+    try {
+      if (!TMDB_API_KEY) {
+        return res.status(400).json({ error: "TMDB API key not configured" });
+      }
+
+      const query = req.query.query as string;
+      const year = req.query.year as string | undefined;
+      
+      if (!query) {
+        return res.status(400).json({ error: "Query required" });
+      }
+
+      let url = `${TMDB_BASE_URL}/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`;
+      if (year) url += `&year=${year}`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      const results = (data.results || []).slice(0, 10).map((m: any) => ({
+        id: m.id,
+        title: m.title,
+        originalTitle: m.original_title,
+        year: m.release_date?.substring(0, 4) || null,
+        overview: m.overview,
+        posterPath: m.poster_path ? `https://image.tmdb.org/t/p/w200${m.poster_path}` : null,
+        voteAverage: m.vote_average,
+      }));
+
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to search TMDB" });
+    }
+  });
+
+  app.get("/api/tmdb/search/tv", async (req, res) => {
+    try {
+      if (!TMDB_API_KEY) {
+        return res.status(400).json({ error: "TMDB API key not configured" });
+      }
+
+      const query = req.query.query as string;
+      const year = req.query.year as string | undefined;
+      
+      if (!query) {
+        return res.status(400).json({ error: "Query required" });
+      }
+
+      let url = `${TMDB_BASE_URL}/search/tv?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`;
+      if (year) url += `&first_air_date_year=${year}`;
+
+      const response = await fetch(url);
+      const data = await response.json();
+
+      const results = (data.results || []).slice(0, 10).map((t: any) => ({
+        id: t.id,
+        title: t.name,
+        originalTitle: t.original_name,
+        year: t.first_air_date?.substring(0, 4) || null,
+        overview: t.overview,
+        posterPath: t.poster_path ? `https://image.tmdb.org/t/p/w200${t.poster_path}` : null,
+        voteAverage: t.vote_average,
+      }));
+
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to search TMDB" });
+    }
+  });
+
+  app.get("/api/tmdb/movie/:id", async (req, res) => {
+    try {
+      if (!TMDB_API_KEY) {
+        return res.status(400).json({ error: "TMDB API key not configured" });
+      }
+
+      const url = `${TMDB_BASE_URL}/movie/${req.params.id}?api_key=${TMDB_API_KEY}`;
+      const response = await fetch(url);
+      const m = await response.json();
+
+      res.json({
+        id: m.id,
+        title: m.title,
+        originalTitle: m.original_title,
+        year: m.release_date?.substring(0, 4) || null,
+        overview: m.overview,
+        posterPath: m.poster_path ? `https://image.tmdb.org/t/p/w500${m.poster_path}` : null,
+        backdropPath: m.backdrop_path ? `https://image.tmdb.org/t/p/original${m.backdrop_path}` : null,
+        runtime: m.runtime,
+        genres: m.genres?.map((g: any) => g.name) || [],
+        voteAverage: m.vote_average,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch movie details" });
+    }
+  });
+
+  app.get("/api/tmdb/tv/:id", async (req, res) => {
+    try {
+      if (!TMDB_API_KEY) {
+        return res.status(400).json({ error: "TMDB API key not configured" });
+      }
+
+      const url = `${TMDB_BASE_URL}/tv/${req.params.id}?api_key=${TMDB_API_KEY}`;
+      const response = await fetch(url);
+      const t = await response.json();
+
+      res.json({
+        id: t.id,
+        title: t.name,
+        originalTitle: t.original_name,
+        year: t.first_air_date?.substring(0, 4) || null,
+        overview: t.overview,
+        posterPath: t.poster_path ? `https://image.tmdb.org/t/p/w500${t.poster_path}` : null,
+        backdropPath: t.backdrop_path ? `https://image.tmdb.org/t/p/original${t.backdrop_path}` : null,
+        numberOfSeasons: t.number_of_seasons,
+        numberOfEpisodes: t.number_of_episodes,
+        genres: t.genres?.map((g: any) => g.name) || [],
+        voteAverage: t.vote_average,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch TV details" });
     }
   });
 
