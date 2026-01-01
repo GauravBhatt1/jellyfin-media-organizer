@@ -1,25 +1,5 @@
-# Build stage
-FROM node:20-slim AS builder
-
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install all dependencies including devDependencies
-RUN npm ci --legacy-peer-deps
-
-# Copy all source code
-COPY . .
-
-# Increase Node memory for build (VPS may have limited RAM)
-ENV NODE_OPTIONS="--max-old-space-size=2048"
-
-# Build the application
-RUN npm run build
-
-# Production stage
-FROM node:20-slim AS runner
+# Simple production image - no build required (dist is pre-built)
+FROM node:20-slim
 
 WORKDIR /app
 
@@ -29,8 +9,8 @@ COPY package*.json ./
 # Install production dependencies only
 RUN npm ci --omit=dev --legacy-peer-deps
 
-# Copy built application from builder
-COPY --from=builder /app/dist ./dist
+# Copy pre-built dist folder
+COPY dist ./dist
 
 # Create media directories
 RUN mkdir -p /mnt /media /data
