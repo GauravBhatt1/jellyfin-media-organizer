@@ -382,32 +382,137 @@ async function moveFileToDestination(
   }
 }
 
+// Helper: Delete empty folders after file move (up to root boundary)
+async function cleanupEmptyFolders(
+  filePath: string,
+  rootBoundaries: string[],
+  isDocker: boolean = false
+): Promise<string[]> {
+  const deletedFolders: string[] = [];
+  const HOST_PREFIX = "/host";
+  
+  try {
+    let currentDir = path.dirname(filePath);
+    const actualRoot = isDocker ? HOST_PREFIX : "";
+    
+    // Normalize root boundaries
+    const normalizedRoots = rootBoundaries.map(r => 
+      path.normalize(r).replace(/\/$/, "")
+    );
+    
+    while (currentDir && currentDir !== "/" && currentDir !== ".") {
+      // Check if we hit a root boundary
+      const normalizedCurrent = path.normalize(currentDir).replace(/\/$/, "");
+      if (normalizedRoots.some(root => normalizedCurrent === root || normalizedCurrent.endsWith(root))) {
+        break;
+      }
+      
+      const actualDir = isDocker ? `${HOST_PREFIX}${currentDir}` : currentDir;
+      
+      try {
+        const contents = await fs.promises.readdir(actualDir);
+        if (contents.length === 0) {
+          await fs.promises.rmdir(actualDir);
+          deletedFolders.push(currentDir);
+          currentDir = path.dirname(currentDir);
+        } else {
+          break; // Folder not empty
+        }
+      } catch {
+        break; // Can't read or delete
+      }
+    }
+  } catch (err) {
+    console.error("Error cleaning up folders:", err);
+  }
+  
+  return deletedFolders;
+}
+
+// TMDB lookup cache (in-memory for current session)
+const tmdbCache = new Map<string, { id: number; name: string; year: number | null }>();
+
+// Helper: Search TMDB for canonical name
+async function lookupTmdb(
+  name: string,
+  type: "movie" | "tvshow",
+  year: number | null
+): Promise<{ id: number; name: string; year: number | null } | null> {
+  const cacheKey = `${type}:${name.toLowerCase()}:${year || ""}`;
+  
+  if (tmdbCache.has(cacheKey)) {
+    return tmdbCache.get(cacheKey)!;
+  }
+  
+  const apiKey = TMDB_API_KEY;
+  if (!apiKey) return null;
+  
+  try {
+    const endpoint = type === "movie" ? "movie" : "tv";
+    let url = `${TMDB_BASE_URL}/search/${endpoint}?api_key=${apiKey}&query=${encodeURIComponent(name)}`;
+    if (year) {
+      url += type === "movie" ? `&year=${year}` : `&first_air_date_year=${year}`;
+    }
+    
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    
+    const data = await response.json();
+    if (!data.results || data.results.length === 0) return null;
+    
+    const result = data.results[0];
+    const tmdbResult = {
+      id: result.id,
+      name: type === "movie" ? result.title : result.name,
+      year: type === "movie" 
+        ? (result.release_date ? parseInt(result.release_date.substring(0, 4)) : null)
+        : (result.first_air_date ? parseInt(result.first_air_date.substring(0, 4)) : null)
+    };
+    
+    tmdbCache.set(cacheKey, tmdbResult);
+    return tmdbResult;
+  } catch (err) {
+    console.error("TMDB lookup error:", err);
+    return null;
+  }
+}
+
 async function generateDestinationPath(
   parsed: ReturnType<typeof parseMediaFilename>,
   detectedName: string,
-  basePaths: { movies: string; tvshows: string }
+  basePaths: { movies: string; tvshows: string },
+  tmdbName?: string | null,
+  tmdbYear?: number | null
 ): Promise<string> {
   const { detectedType, year, season, episode, extension } = parsed;
 
   const titleCase = (str: string) =>
     str.replace(/\b\w/g, (c) => c.toUpperCase());
 
-  const formattedName = titleCase(detectedName);
-  const yearStr = year ? ` (${year})` : "";
+  // Use TMDB name if available, otherwise use detected name
+  const canonicalName = tmdbName || titleCase(detectedName);
+  const canonicalYear = tmdbYear || year;
+  const yearStr = canonicalYear ? ` (${canonicalYear})` : "";
 
   if (detectedType === "movie") {
-    const folderName = `${formattedName}${yearStr}`;
-    const fileName = `${formattedName}${yearStr}${extension}`;
+    const folderName = `${canonicalName}${yearStr}`;
+    const fileName = `${canonicalName}${yearStr}${extension}`;
     return `${basePaths.movies}/${folderName}/${fileName}`;
   }
 
   if (detectedType === "tvshow" && season !== null && episode !== null) {
-    // Get canonical series folder name (reuses existing if available)
-    const seriesFolder = await getCanonicalSeriesFolder(detectedName, year);
+    // Use TMDB name for folder, or get canonical from existing series
+    let seriesFolder: string;
+    if (tmdbName) {
+      seriesFolder = `${tmdbName}${yearStr}`;
+    } else {
+      seriesFolder = await getCanonicalSeriesFolder(detectedName, year);
+    }
+    
     const seasonFolder = `Season ${season.toString().padStart(2, "0")}`;
     const episodeStr = `S${season.toString().padStart(2, "0")}E${episode.toString().padStart(2, "0")}`;
     
-    // Extract just the series name for the filename (from the folder name)
+    // Extract just the series name for the filename
     const seriesNameForFile = seriesFolder.replace(/\s*\(\d{4}\)$/, "");
     const fileName = `${seriesNameForFile} - ${episodeStr}${extension}`;
     return `${basePaths.tvshows}/${seriesFolder}/${seasonFolder}/${fileName}`;
@@ -679,10 +784,32 @@ export async function registerRoutes(
               confidence = Math.min(confidence + 15, 100); // Boost confidence for consensus
             }
             
-            const destinationPath = await generateDestinationPath(parsed, detectedName, {
-              movies: defaultMoviesPath,
-              tvshows: defaultTvShowsPath,
-            });
+            // TMDB lookup for canonical naming
+            let tmdbId: number | null = null;
+            let tmdbName: string | null = null;
+            let tmdbYear: number | null = null;
+            
+            if (parsed.detectedType !== "unknown") {
+              const tmdbResult = await lookupTmdb(
+                detectedName, 
+                parsed.detectedType, 
+                parsed.year
+              );
+              if (tmdbResult) {
+                tmdbId = tmdbResult.id;
+                tmdbName = tmdbResult.name;
+                tmdbYear = tmdbResult.year;
+                confidence = Math.min(confidence + 10, 100); // Boost for TMDB match
+              }
+            }
+            
+            const destinationPath = await generateDestinationPath(
+              parsed, 
+              detectedName, 
+              { movies: defaultMoviesPath, tvshows: defaultTvShowsPath },
+              tmdbName,
+              tmdbYear
+            );
 
             const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
 
@@ -691,9 +818,11 @@ export async function registerRoutes(
               originalPath: userPath,
               extension: parsed.extension,
               detectedType: parsed.detectedType,
-              detectedName: detectedName,
+              detectedName: tmdbName || detectedName,
               cleanedName: parsed.cleanedName,
-              year: parsed.year,
+              tmdbId: tmdbId,
+              tmdbName: tmdbName,
+              year: tmdbYear || parsed.year,
               season: parsed.season,
               episode: parsed.episode,
               status: "pending",
@@ -968,14 +1097,29 @@ export async function registerRoutes(
           }
         }
 
+        // Cleanup empty source folders
+        const settings = await storage.getAllSettings();
+        const sourcePaths = [
+          ...(JSON.parse(settings.moviesPaths || "[]") as string[]),
+          ...(JSON.parse(settings.tvShowsPaths || "[]") as string[])
+        ];
+        const deletedFolders = await cleanupEmptyFolders(
+          item.originalPath, 
+          sourcePaths,
+          isDocker
+        );
+        
         // Create success log
+        const cleanupMsg = deletedFolders.length > 0 
+          ? ` (cleaned ${deletedFolders.length} empty folder(s))` 
+          : "";
         await storage.createLog({
           mediaItemId: id,
           action: "organize",
           fromPath: item.originalPath,
           toPath: item.destinationPath,
           success: true,
-          message: `Moved ${item.detectedType}: ${item.detectedName}`,
+          message: `Moved ${item.detectedType}: ${item.detectedName}${cleanupMsg}`,
         });
 
         organized.push(id);
