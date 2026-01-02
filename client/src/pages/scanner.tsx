@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   FolderSearch,
@@ -10,6 +11,8 @@ import {
   RefreshCw,
   Loader2,
   Info,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,12 +37,31 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { MediaItem } from "@shared/schema";
 
+interface PaginatedResponse {
+  items: MediaItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
 export default function Scanner() {
   const { toast } = useToast();
+  const [page, setPage] = useState(1);
+  const limit = 50;
 
-  const { data: items, isLoading } = useQuery<MediaItem[]>({
-    queryKey: ["/api/media-items"],
+  const { data, isLoading } = useQuery<PaginatedResponse>({
+    queryKey: ["/api/media-items", page],
+    queryFn: async () => {
+      const res = await fetch(`/api/media-items?page=${page}&limit=${limit}`);
+      return res.json();
+    },
   });
+
+  const items = data?.items || [];
+  const pagination = data?.pagination;
 
   const scanFolderMutation = useMutation({
     mutationFn: async () => {
@@ -167,6 +189,7 @@ export default function Scanner() {
               ))}
             </div>
           ) : items && items.length > 0 ? (
+            <>
             <ScrollArea className="h-[500px]">
               <Table>
                 <TableHeader>
@@ -254,6 +277,41 @@ export default function Scanner() {
                 </TableBody>
               </Table>
             </ScrollArea>
+            
+            {/* Pagination Controls */}
+            {pagination && pagination.totalPages > 1 && (
+              <div className="flex items-center justify-between gap-4 pt-4 border-t">
+                <p className="text-sm text-muted-foreground">
+                  Showing {((pagination.page - 1) * pagination.limit) + 1} - {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} items
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={pagination.page <= 1}
+                    data-testid="button-prev-page"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Previous
+                  </Button>
+                  <span className="text-sm px-2">
+                    Page {pagination.page} of {pagination.totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+                    disabled={pagination.page >= pagination.totalPages}
+                    data-testid="button-next-page"
+                  >
+                    Next
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+            </>
           ) : (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted mb-4">
