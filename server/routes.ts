@@ -190,11 +190,26 @@ export async function registerRoutes(
     }
   });
 
-  // Media Items endpoints
+  // Media Items endpoints - with pagination
   app.get("/api/media-items", async (req, res) => {
     try {
-      const items = await storage.getAllMediaItems();
-      res.json(items);
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = (page - 1) * limit;
+      
+      const allItems = await storage.getAllMediaItems();
+      const total = allItems.length;
+      const items = allItems.slice(offset, offset + limit);
+      
+      res.json({
+        items,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        }
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch media items" });
     }
