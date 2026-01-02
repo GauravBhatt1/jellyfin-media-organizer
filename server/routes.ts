@@ -201,10 +201,12 @@ function findSeriesNameByConsensus(filenames: string[]): string | null {
   if (tokenArrays.length < 2) return null;
   
   const commonPrefix = longestCommonPrefix(tokenArrays);
+  if (commonPrefix.length < 2) return null;
   
-  // Need at least 2 non-numeric words for a valid series name
-  const meaningfulPrefix = commonPrefix.filter(t => !/^\d+$/.test(t));
-  if (meaningfulPrefix.length < 2) return null;
+  // Validation: need at least 1 non-numeric word for a valid series name
+  // (keeps numeric tokens like "3" in "3 Body Problem")
+  const nonNumericCount = commonPrefix.filter(t => !/^\d+$/.test(t)).length;
+  if (nonNumericCount < 1) return null;
   
   // Guard: only use consensus if at least 70% of files share this prefix
   // This prevents applying wrong names to mixed directories
@@ -224,11 +226,12 @@ function findSeriesNameByConsensus(filenames: string[]): string | null {
   
   if (matchCount < minOverlap) return null;
   
-  // Guard: prefix should be at least 3 characters total
-  const seriesName = meaningfulPrefix.map(t => 
-    t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
+  // Build series name from ALL prefix tokens (including numeric ones like "3")
+  const seriesName = commonPrefix.map(t => 
+    /^\d+$/.test(t) ? t : t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
   ).join(" ");
   
+  // Guard: series name should be at least 3 characters total
   if (seriesName.length < 3) return null;
   
   return seriesName;
