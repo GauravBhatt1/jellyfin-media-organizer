@@ -69,6 +69,122 @@ function getExtension(filename: string): string {
   return match ? match[0].toLowerCase() : "";
 }
 
+// Token-based parser: strips quality tags, release groups, and extracts core name
+function tokenizeFilename(filename: string): string[] {
+  // Remove extension
+  let name = filename.replace(/\.[a-zA-Z0-9]{2,4}$/, "");
+  // Replace delimiters with spaces
+  name = name.replace(/[._\-\[\]()]/g, " ");
+  // Split into tokens
+  return name.split(/\s+/).filter(t => t.length > 0);
+}
+
+// Quality and release tags to remove
+const QUALITY_TAGS = new Set([
+  '720p', '1080p', '2160p', '4k', 'hdtv', 'web', 'webrip', 'webdl', 'web-dl',
+  'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdrip', 'hdtvrip',
+  'x264', 'x265', 'hevc', 'h264', 'h265', 'avc',
+  'aac', 'ac3', 'dts', 'ddp', 'ddp5', 'dd5', 'atmos', 'truehd',
+  'proper', 'repack', 'internal', 'readnfo', 'extended', 'uncut', 'unrated',
+  '10bit', '8bit', 'hdr', 'hdr10', 'sdr', 'dv', 'dolby', 'vision',
+  'amzn', 'nf', 'hmax', 'dsnp', 'atvp', 'pcok', 'hulu',
+  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks'
+]);
+
+// Get tokens before any S01E01 pattern or quality tags
+function extractSeriesTokens(tokens: string[]): string[] {
+  const result: string[] = [];
+  
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+    
+    // Stop at S01E01 pattern
+    if (/^s\d{1,2}e\d{1,3}$/i.test(token)) break;
+    // Stop at season marker
+    if (/^s\d{1,2}$/i.test(token)) break;
+    // Stop at 1x01 pattern
+    if (/^\d{1,2}x\d{1,3}$/i.test(token)) break;
+    // Stop at quality/release tags
+    if (QUALITY_TAGS.has(lower)) break;
+    // Stop at year in parentheses style (already removed parens)
+    if (/^(19|20)\d{2}$/.test(token) && i > 0) break;
+    // Stop at release group patterns
+    if (RELEASE_GROUPS.some(g => lower === g.toLowerCase())) break;
+    
+    result.push(token);
+  }
+  
+  return result;
+}
+
+// Find longest common prefix of token arrays
+function longestCommonPrefix(tokenArrays: string[][]): string[] {
+  if (tokenArrays.length === 0) return [];
+  if (tokenArrays.length === 1) return tokenArrays[0];
+  
+  const first = tokenArrays[0];
+  const result: string[] = [];
+  
+  for (let i = 0; i < first.length; i++) {
+    const token = first[i].toLowerCase();
+    let allMatch = true;
+    
+    for (let j = 1; j < tokenArrays.length; j++) {
+      if (i >= tokenArrays[j].length || tokenArrays[j][i].toLowerCase() !== token) {
+        allMatch = false;
+        break;
+      }
+    }
+    
+    if (allMatch) {
+      result.push(first[i]);
+    } else {
+      break;
+    }
+  }
+  
+  return result;
+}
+
+// Extract series name from filename (single file)
+function extractSeriesName(filename: string): string {
+  const tokens = tokenizeFilename(filename);
+  const seriesTokens = extractSeriesTokens(tokens);
+  
+  if (seriesTokens.length > 0) {
+    // Title case
+    return seriesTokens.map(t => 
+      t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
+    ).join(" ");
+  }
+  
+  return cleanFilename(filename);
+}
+
+// Batch consensus: find series name from multiple filenames
+function findSeriesNameByConsensus(filenames: string[]): string | null {
+  if (filenames.length < 2) return null;
+  
+  const tokenArrays = filenames.map(f => {
+    const tokens = tokenizeFilename(f);
+    return extractSeriesTokens(tokens);
+  }).filter(t => t.length > 0);
+  
+  if (tokenArrays.length < 2) return null;
+  
+  const commonPrefix = longestCommonPrefix(tokenArrays);
+  
+  // Need at least 2 words for a valid series name
+  if (commonPrefix.length >= 2) {
+    return commonPrefix.map(t => 
+      t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
+    ).join(" ");
+  }
+  
+  return null;
+}
+
 function parseMediaFilename(filename: string): {
   cleanedName: string;
   detectedType: MediaType;
@@ -92,10 +208,8 @@ function parseMediaFilename(filename: string): {
     detectedType = "tvshow";
     confidence = 80;
 
-    const nameMatch = filename.match(/^(.+?)(?:[Ss]\d|Season|\d+[xX])/i);
-    if (nameMatch) {
-      detectedName = cleanFilename(nameMatch[1]);
-    }
+    // Use improved series name extraction
+    detectedName = extractSeriesName(filename);
   } else if (year) {
     detectedType = "movie";
     confidence = 70;
@@ -422,52 +536,79 @@ export async function registerRoutes(
       totalFiles = allVideoFiles.length;
       await storage.updateScanJob(jobId, { totalFiles });
 
-      // Process in batches
-      for (let i = 0; i < allVideoFiles.length; i += BATCH_SIZE) {
-        const batch = allVideoFiles.slice(i, i + BATCH_SIZE);
+      // Group files by parent directory for consensus-based naming
+      const filesByDir: Record<string, Array<{filePath: string, sourcePath: string}>> = {};
+      for (const file of allVideoFiles) {
+        const dir = path.dirname(file.filePath);
+        if (!filesByDir[dir]) filesByDir[dir] = [];
+        filesByDir[dir].push(file);
+      }
+
+      // Process each directory group
+      for (const dir of Object.keys(filesByDir)) {
+        const dirFiles = filesByDir[dir];
+        // Get filenames for consensus detection
+        const filenames = dirFiles.map((f: {filePath: string, sourcePath: string}) => path.basename(f.filePath));
         
-        for (const { filePath, sourcePath } of batch) {
-          const filename = path.basename(filePath);
+        // Try to find consensus series name for TV shows in this directory
+        const consensusName = findSeriesNameByConsensus(filenames);
+        
+        // Process files in this directory
+        for (let i = 0; i < dirFiles.length; i += BATCH_SIZE) {
+          const batch = dirFiles.slice(i, i + BATCH_SIZE);
           
-          // Check if already exists
-          const existing = await storage.getMediaItemByFilename(filename);
-          if (existing) {
+          for (const { filePath, sourcePath } of batch) {
+            const filename = path.basename(filePath);
+            
+            // Check if already exists
+            const existing = await storage.getMediaItemByFilename(filename);
+            if (existing) {
+              processedFiles++;
+              continue;
+            }
+
+            const parsed = parseMediaFilename(filename);
+            
+            // If this is a TV show and we have consensus, use consensus name
+            let detectedName = parsed.detectedName;
+            let confidence = parsed.confidence;
+            if (parsed.detectedType === "tvshow" && consensusName && consensusName.length >= 3) {
+              detectedName = consensusName;
+              confidence = Math.min(confidence + 15, 100); // Boost confidence for consensus
+            }
+            
+            const destinationPath = await generateDestinationPath(parsed, detectedName, {
+              movies: defaultMoviesPath,
+              tvshows: defaultTvShowsPath,
+            });
+
+            const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
+
+            await storage.createMediaItem({
+              originalFilename: filename,
+              originalPath: userPath,
+              extension: parsed.extension,
+              detectedType: parsed.detectedType,
+              detectedName: detectedName,
+              cleanedName: parsed.cleanedName,
+              year: parsed.year,
+              season: parsed.season,
+              episode: parsed.episode,
+              status: "pending",
+              destinationPath,
+              confidence: confidence,
+            });
+
+            newItems++;
             processedFiles++;
-            continue;
           }
-
-          const parsed = parseMediaFilename(filename);
-          const destinationPath = await generateDestinationPath(parsed, parsed.detectedName, {
-            movies: defaultMoviesPath,
-            tvshows: defaultTvShowsPath,
-          });
-
-          const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
-
-          await storage.createMediaItem({
-            originalFilename: filename,
-            originalPath: userPath,
-            extension: parsed.extension,
-            detectedType: parsed.detectedType,
-            detectedName: parsed.detectedName,
-            cleanedName: parsed.cleanedName,
-            year: parsed.year,
-            season: parsed.season,
-            episode: parsed.episode,
-            status: "pending",
-            destinationPath,
-            confidence: parsed.confidence,
-          });
-
-          newItems++;
-          processedFiles++;
+          
+          // Update progress after each batch
+          await storage.updateScanJob(jobId, { processedFiles, newItems });
+          
+          // Small delay to prevent CPU spike
+          await new Promise(resolve => setTimeout(resolve, 10));
         }
-        
-        // Update progress after each batch
-        await storage.updateScanJob(jobId, { processedFiles, newItems });
-        
-        // Small delay to prevent CPU spike
-        await new Promise(resolve => setTimeout(resolve, 10));
       }
 
       await storage.updateScanJob(jobId, { 
