@@ -38,6 +38,8 @@ interface OrganizationPreview {
 export default function Organizer() {
   const { toast } = useToast();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
+  const [isOrganizing, setIsOrganizing] = useState(false);
+  const [organizeProgress, setOrganizeProgress] = useState({ current: 0, total: 0 });
 
   const { data: pendingItems, isLoading } = useQuery<MediaItem[]>({
     queryKey: ["/api/media-items", "pending"],
@@ -46,6 +48,46 @@ export default function Organizer() {
   const { data: preview, isLoading: previewLoading } = useQuery<OrganizationPreview[]>({
     queryKey: ["/api/organize/preview"],
   });
+
+  // Organize files in batches to avoid timeout
+  const organizeInBatches = async (ids: string[]) => {
+    const BATCH_SIZE = 25;
+    setIsOrganizing(true);
+    setOrganizeProgress({ current: 0, total: ids.length });
+    
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const batch = ids.slice(i, i + BATCH_SIZE);
+      try {
+        await apiRequest("POST", "/api/organize", { ids: batch });
+        successCount += batch.length;
+      } catch (err) {
+        errorCount += batch.length;
+      }
+      setOrganizeProgress({ current: Math.min(i + BATCH_SIZE, ids.length), total: ids.length });
+    }
+    
+    queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/organize/preview"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+    setSelectedItems(new Set());
+    setIsOrganizing(false);
+    
+    if (errorCount > 0) {
+      toast({
+        title: "Organization Completed with Errors",
+        description: `${successCount} files organized, ${errorCount} failed.`,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Organization Complete",
+        description: `${successCount} files have been organized.`,
+      });
+    }
+  };
 
   const organizeMutation = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -102,7 +144,12 @@ export default function Organizer() {
 
   const handleOrganizeAll = () => {
     if (preview && preview.length > 0) {
-      organizeMutation.mutate(preview.map((item) => item.id));
+      // Use batching for large numbers
+      if (preview.length > 50) {
+        organizeInBatches(preview.map((item) => item.id));
+      } else {
+        organizeMutation.mutate(preview.map((item) => item.id));
+      }
     }
   };
 
@@ -158,11 +205,20 @@ export default function Organizer() {
           </Button>
           <Button
             onClick={handleOrganizeAll}
-            disabled={!preview || preview.length === 0 || organizeMutation.isPending}
+            disabled={!preview || preview.length === 0 || organizeMutation.isPending || isOrganizing}
             data-testid="button-organize-all"
           >
-            <FolderTree className="h-4 w-4 mr-2" />
-            Organize All
+            {isOrganizing ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                {organizeProgress.current}/{organizeProgress.total}
+              </>
+            ) : (
+              <>
+                <FolderTree className="h-4 w-4 mr-2" />
+                Organize All
+              </>
+            )}
           </Button>
         </div>
       </div>
