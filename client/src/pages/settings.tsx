@@ -14,6 +14,10 @@ import {
   EyeOff,
   Plus,
   Trash2,
+  Radio,
+  Play,
+  Square,
+  Activity,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,9 +25,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { FolderPicker } from "@/components/folder-picker";
+
+interface MonitoringStatus {
+  isRunning: boolean;
+  watchedPaths: string[];
+  filesDetected: number;
+  filesProcessed: number;
+  lastActivity: string | null;
+  recentErrors: string[];
+}
 
 interface AppSettings {
   moviesPaths: string[];
@@ -92,6 +106,53 @@ export default function Settings() {
       toast({
         title: "Save Failed",
         description: "There was an error saving your settings.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const { data: monitoringStatus } = useQuery<MonitoringStatus>({
+    queryKey: ["/api/monitoring/status"],
+    refetchInterval: 3000,
+  });
+
+  const startMonitoringMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/monitoring/start", {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/monitoring/status"] });
+      toast({
+        title: data.success ? "Monitoring Started" : "Already Running",
+        description: data.message,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Failed",
+        description: "Could not start folder monitoring.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const stopMonitoringMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/monitoring/stop", {});
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/monitoring/status"] });
+      toast({
+        title: data.success ? "Monitoring Stopped" : "Not Running",
+        description: data.message,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Failed",
+        description: "Could not stop folder monitoring.",
         variant: "destructive",
       });
     },
@@ -303,6 +364,118 @@ export default function Settings() {
                 </p>
               )}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Radio className="h-5 w-5 text-green-500" />
+              Smart Folder Monitoring
+            </CardTitle>
+            <CardDescription>
+              Automatically detect and process new media files when they are added
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`h-3 w-3 rounded-full ${monitoringStatus?.isRunning ? 'bg-green-500 animate-pulse' : 'bg-muted-foreground'}`} />
+                <div>
+                  <p className="font-medium">
+                    {monitoringStatus?.isRunning ? "Monitoring Active" : "Monitoring Stopped"}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    {monitoringStatus?.isRunning 
+                      ? `Watching ${monitoringStatus.watchedPaths.length} folders`
+                      : "Enable to automatically detect new files"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {monitoringStatus?.isRunning ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => stopMonitoringMutation.mutate()}
+                    disabled={stopMonitoringMutation.isPending}
+                    data-testid="button-stop-monitoring"
+                  >
+                    {stopMonitoringMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Square className="h-4 w-4 mr-2" />
+                    )}
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() => startMonitoringMutation.mutate()}
+                    disabled={startMonitoringMutation.isPending}
+                    data-testid="button-start-monitoring"
+                  >
+                    {startMonitoringMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Play className="h-4 w-4 mr-2" />
+                    )}
+                    Start Monitoring
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {monitoringStatus?.isRunning && (
+              <>
+                <Separator />
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Files Detected</p>
+                    <p className="text-lg font-semibold" data-testid="text-files-detected">
+                      {monitoringStatus.filesDetected}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Files Processed</p>
+                    <p className="text-lg font-semibold" data-testid="text-files-processed">
+                      {monitoringStatus.filesProcessed}
+                    </p>
+                  </div>
+                  <div className="space-y-1 col-span-2">
+                    <p className="text-xs text-muted-foreground">Last Activity</p>
+                    <p className="text-sm" data-testid="text-last-activity">
+                      {monitoringStatus.lastActivity 
+                        ? new Date(monitoringStatus.lastActivity).toLocaleString()
+                        : "No activity yet"}
+                    </p>
+                  </div>
+                </div>
+                {monitoringStatus.watchedPaths.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground">Watched Folders</p>
+                    <div className="flex flex-wrap gap-2">
+                      {monitoringStatus.watchedPaths.map((p, i) => (
+                        <Badge key={i} variant="secondary" className="text-xs">
+                          {p}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {monitoringStatus.recentErrors.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <AlertCircle className="h-3 w-3 text-destructive" />
+                      Recent Errors
+                    </p>
+                    <div className="text-xs text-destructive space-y-1">
+                      {monitoringStatus.recentErrors.map((err, i) => (
+                        <p key={i}>{err}</p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
 
