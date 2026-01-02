@@ -51,10 +51,10 @@ interface AppSettings {
 }
 
 const defaultSettings: AppSettings = {
-  moviesPaths: ["/Movies"],
-  tvShowsPaths: ["/TV Shows"],
-  moviesDestination: "/Movies/Organized",
-  tvShowsDestination: "/TV Shows/Organized",
+  moviesPaths: [],
+  tvShowsPaths: [],
+  moviesDestination: "",
+  tvShowsDestination: "",
   autoOrganize: false,
   removeReleaseGroups: true,
   fuzzyMatchThreshold: 80,
@@ -90,8 +90,8 @@ export default function Settings() {
           : (savedSettings as any).tvShowsPath
             ? [(savedSettings as any).tvShowsPath]
             : defaultSettings.tvShowsPaths,
-        moviesDestination: savedSettings.moviesDestination || defaultSettings.moviesDestination,
-        tvShowsDestination: savedSettings.tvShowsDestination || defaultSettings.tvShowsDestination,
+        moviesDestination: savedSettings.moviesDestination || "",
+        tvShowsDestination: savedSettings.tvShowsDestination || "",
       };
       setSettings(migrated);
     }
