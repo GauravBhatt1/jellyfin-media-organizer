@@ -88,8 +88,7 @@ const QUALITY_TAGS = new Set([
   'proper', 'repack', 'internal', 'readnfo', 'extended', 'uncut', 'unrated',
   '10bit', '8bit', 'hdr', 'hdr10', 'sdr', 'dv', 'dolby', 'vision',
   'amzn', 'nf', 'hmax', 'dsnp', 'atvp', 'pcok', 'hulu',
-  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks',
-  '1', '2', '3', '4', '5', '6', '7', '8', '9', '10' // Common standalone episode numbers
+  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks'
 ]);
 
 // Normalize token for quality tag matching (remove dots, lowercase)
@@ -106,10 +105,12 @@ function isQualityTag(token: string): boolean {
 // Get tokens before any S01E01 pattern or quality tags
 function extractSeriesTokens(tokens: string[]): string[] {
   const result: string[] = [];
+  let hasNonNumericToken = false;
   
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     const lower = token.toLowerCase();
+    const isNumeric = /^\d+$/.test(token);
     
     // Stop at S01E01 pattern
     if (/^s\d{1,2}e\d{1,3}$/i.test(token)) break;
@@ -117,15 +118,16 @@ function extractSeriesTokens(tokens: string[]): string[] {
     if (/^s\d{1,2}$/i.test(token)) break;
     // Stop at 1x01 pattern
     if (/^\d{1,2}x\d{1,3}$/i.test(token)) break;
-    // Stop at quality/release tags (normalized comparison)
-    if (isQualityTag(token)) break;
-    // Stop at year in parentheses style (already removed parens)
-    if (/^(19|20)\d{2}$/.test(token) && i > 0) break;
-    // Stop at release group patterns
-    if (RELEASE_GROUPS.some(g => lower === g.toLowerCase())) break;
-    // Stop at pure numbers (likely episode numbers)
-    if (/^\d{1,3}$/.test(token) && i > 0) break;
+    // Stop at quality/release tags (normalized comparison) - only after we have some title
+    if (hasNonNumericToken && isQualityTag(token)) break;
+    // Stop at year in parentheses style (only after we have title tokens)
+    if (/^(19|20)\d{2}$/.test(token) && hasNonNumericToken) break;
+    // Stop at release group patterns (only after we have title tokens)
+    if (hasNonNumericToken && RELEASE_GROUPS.some(g => lower === g.toLowerCase())) break;
+    // Stop at pure numbers that look like episode numbers (only after we have non-numeric tokens)
+    if (isNumeric && hasNonNumericToken && parseInt(token) <= 50) break;
     
+    if (!isNumeric) hasNonNumericToken = true;
     result.push(token);
   }
   
