@@ -362,6 +362,8 @@ export class MemStorage implements IStorage {
   }
 
   // Duplicate detection (part of IStorage interface)
+  // For TV shows: duplicates must have SAME series + season + episode
+  // For movies: use fuzzy matching on cleaned name
   async findDuplicates(threshold: number = 80): Promise<DuplicateGroup[]> {
     const items = await this.getAllMediaItems();
     const groups: Map<
@@ -377,40 +379,79 @@ export class MemStorage implements IStorage {
 
     for (const item of items) {
       const cleanedName = cleanFilename(item.originalFilename);
-      const normalizedName = normalizeForComparison(item.originalFilename);
+      
+      // Create a unique key based on content type
+      let groupKey: string;
+      
+      if (item.detectedType === "tvshow" && item.season !== null && item.episode !== null) {
+        // For TV shows: group by series name + season + episode
+        // Only files with the EXACT same episode are duplicates
+        const seriesName = normalizeForComparison(item.detectedName || item.originalFilename);
+        groupKey = `tv:${seriesName}:s${item.season}e${item.episode}`;
+      } else if (item.detectedType === "movie") {
+        // For movies: use normalized name + year
+        const movieName = normalizeForComparison(item.detectedName || item.originalFilename);
+        groupKey = `movie:${movieName}:${item.year || 'unknown'}`;
+      } else {
+        // For unknown types: use fuzzy matching
+        groupKey = `unknown:${normalizeForComparison(item.originalFilename)}`;
+      }
 
-      let foundGroup = false;
-
-      for (const [groupKey, groupItems] of groups) {
+      // Check if this group already exists
+      if (groups.has(groupKey)) {
+        const groupItems = groups.get(groupKey)!;
         const firstItem = groupItems[0];
         const similarity = calculateSimilarity(
           item.originalFilename,
           firstItem.originalFilename
         );
+        
+        groupItems.push({
+          id: item.id,
+          originalFilename: item.originalFilename,
+          cleanedName,
+          similarity,
+          isOriginal: false,
+        });
+      } else {
+        // For unknown types, also check fuzzy matching against existing groups
+        let foundGroup = false;
+        
+        if (item.detectedType !== "tvshow" && item.detectedType !== "movie") {
+          for (const [existingKey, groupItems] of groups) {
+            if (!existingKey.startsWith("unknown:")) continue;
+            
+            const firstItem = groupItems[0];
+            const similarity = calculateSimilarity(
+              item.originalFilename,
+              firstItem.originalFilename
+            );
 
-        if (similarity >= threshold) {
-          groupItems.push({
-            id: item.id,
-            originalFilename: item.originalFilename,
-            cleanedName,
-            similarity,
-            isOriginal: false,
-          });
-          foundGroup = true;
-          break;
+            if (similarity >= threshold) {
+              groupItems.push({
+                id: item.id,
+                originalFilename: item.originalFilename,
+                cleanedName,
+                similarity,
+                isOriginal: false,
+              });
+              foundGroup = true;
+              break;
+            }
+          }
         }
-      }
 
-      if (!foundGroup) {
-        groups.set(normalizedName, [
-          {
-            id: item.id,
-            originalFilename: item.originalFilename,
-            cleanedName,
-            similarity: 100,
-            isOriginal: true,
-          },
-        ]);
+        if (!foundGroup) {
+          groups.set(groupKey, [
+            {
+              id: item.id,
+              originalFilename: item.originalFilename,
+              cleanedName,
+              similarity: 100,
+              isOriginal: true,
+            },
+          ]);
+        }
       }
     }
 
