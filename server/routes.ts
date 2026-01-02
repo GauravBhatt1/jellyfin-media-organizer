@@ -444,7 +444,16 @@ async function lookupTmdb(
     return tmdbCache.get(cacheKey)!;
   }
   
-  const apiKey = TMDB_API_KEY;
+  // Try env var first, then settings
+  let apiKey = TMDB_API_KEY;
+  if (!apiKey) {
+    try {
+      const settings = await storage.getAllSettings();
+      apiKey = settings.tmdbApiKey || null;
+    } catch {
+      apiKey = null;
+    }
+  }
   if (!apiKey) return null;
   
   try {
