@@ -950,8 +950,8 @@ export async function registerRoutes(
       });
 
       // Use separate destination paths (not source paths)
-      const moviesDestination = settings.moviesDestination || "/Movies/Organized";
-      const tvShowsDestination = settings.tvShowsDestination || "/TV Shows/Organized";
+      const moviesDestination = settings.moviesDestination || "";
+      const tvShowsDestination = settings.tvShowsDestination || "";
 
       // Start background scan (non-blocking)
       setImmediate(() => {
@@ -1056,6 +1056,17 @@ export async function registerRoutes(
       const { ids, dryRun = false } = req.body;
       if (!Array.isArray(ids)) {
         return res.status(400).json({ error: "ids must be an array" });
+      }
+
+      // Check if destination paths are configured
+      const settings = await storage.getAllSettings();
+      const moviesDestination = settings.moviesDestination || "";
+      const tvShowsDestination = settings.tvShowsDestination || "";
+      
+      if (!moviesDestination && !tvShowsDestination) {
+        return res.status(400).json({ 
+          error: "Destination paths not configured. Please set Movies Destination and TV Shows Destination in Settings first." 
+        });
       }
 
       // Detect if running in Docker
@@ -1378,8 +1389,8 @@ export async function registerRoutes(
       res.json({
         moviesPaths,
         tvShowsPaths,
-        moviesDestination: settings.moviesDestination || "/Movies/Organized",
-        tvShowsDestination: settings.tvShowsDestination || "/TV Shows/Organized",
+        moviesDestination: settings.moviesDestination || "",
+        tvShowsDestination: settings.tvShowsDestination || "",
         autoOrganize: settings.autoOrganize === "true",
         removeReleaseGroups: settings.removeReleaseGroups !== "false",
         fuzzyMatchThreshold: parseInt(settings.fuzzyMatchThreshold || "80", 10),
