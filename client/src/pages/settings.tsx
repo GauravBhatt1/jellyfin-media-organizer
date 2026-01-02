@@ -42,6 +42,8 @@ interface MonitoringStatus {
 interface AppSettings {
   moviesPaths: string[];
   tvShowsPaths: string[];
+  moviesDestination: string;
+  tvShowsDestination: string;
   autoOrganize: boolean;
   removeReleaseGroups: boolean;
   fuzzyMatchThreshold: number;
@@ -51,13 +53,15 @@ interface AppSettings {
 const defaultSettings: AppSettings = {
   moviesPaths: ["/Movies"],
   tvShowsPaths: ["/TV Shows"],
+  moviesDestination: "/Movies/Organized",
+  tvShowsDestination: "/TV Shows/Organized",
   autoOrganize: false,
   removeReleaseGroups: true,
   fuzzyMatchThreshold: 80,
   tmdbApiKey: "",
 };
 
-type FolderPickerTarget = { type: "movies" | "tvshows"; index: number } | null;
+type FolderPickerTarget = { type: "movies" | "tvshows" | "moviesDestination" | "tvShowsDestination"; index: number } | null;
 
 export default function Settings() {
   const { toast } = useToast();
@@ -86,6 +90,8 @@ export default function Settings() {
           : (savedSettings as any).tvShowsPath
             ? [(savedSettings as any).tvShowsPath]
             : defaultSettings.tvShowsPaths,
+        moviesDestination: savedSettings.moviesDestination || defaultSettings.moviesDestination,
+        tvShowsDestination: savedSettings.tvShowsDestination || defaultSettings.tvShowsDestination,
       };
       setSettings(migrated);
     }
@@ -199,25 +205,35 @@ export default function Settings() {
     }
   };
 
-  const openFolderPicker = (type: "movies" | "tvshows", index: number) => {
+  const openFolderPicker = (type: "movies" | "tvshows" | "moviesDestination" | "tvShowsDestination", index: number) => {
     setPickerTarget({ type, index });
     setFolderPickerOpen(true);
   };
 
   const handleFolderSelect = (path: string) => {
     if (pickerTarget) {
-      updatePath(pickerTarget.type, pickerTarget.index, path);
+      if (pickerTarget.type === "moviesDestination") {
+        updateSetting("moviesDestination", path);
+      } else if (pickerTarget.type === "tvShowsDestination") {
+        updateSetting("tvShowsDestination", path);
+      } else {
+        updatePath(pickerTarget.type, pickerTarget.index, path);
+      }
     }
     setPickerTarget(null);
   };
 
   const getPickerTitle = () => {
     if (!pickerTarget) return "Select Folder";
-    return pickerTarget.type === "movies" ? "Select Movies Folder" : "Select TV Shows Folder";
+    if (pickerTarget.type === "moviesDestination") return "Select Movies Destination";
+    if (pickerTarget.type === "tvShowsDestination") return "Select TV Shows Destination";
+    return pickerTarget.type === "movies" ? "Select Movies Source Folder" : "Select TV Shows Source Folder";
   };
 
   const getInitialPath = () => {
     if (!pickerTarget) return "/";
+    if (pickerTarget.type === "moviesDestination") return settings.moviesDestination || "/";
+    if (pickerTarget.type === "tvShowsDestination") return settings.tvShowsDestination || "/";
     const paths = pickerTarget.type === "movies" ? settings.moviesPaths : settings.tvShowsPaths;
     return paths[pickerTarget.index] || "/";
   };
@@ -253,7 +269,7 @@ export default function Settings() {
               Library Paths
             </CardTitle>
             <CardDescription>
-              Add multiple folders for your media library. First folder in each list is the default destination.
+              Source folders to scan for media, and destination folders where organized files will be moved.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -261,7 +277,7 @@ export default function Settings() {
               <div className="flex items-center justify-between">
                 <Label className="flex items-center gap-2 text-base">
                   <Film className="h-4 w-4 text-blue-500" />
-                  Movies Folders
+                  Movies Source Folders
                 </Label>
                 <Button
                   variant="outline"
@@ -303,11 +319,33 @@ export default function Settings() {
                   </div>
                 ))}
               </div>
-              {settings.moviesPaths.length > 1 && (
-                <p className="text-xs text-muted-foreground">
-                  First folder is the default destination for organized movies
-                </p>
-              )}
+            </div>
+
+            <div className="space-y-4">
+              <Label className="flex items-center gap-2 text-base">
+                <Film className="h-4 w-4 text-blue-500" />
+                Movies Destination
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  value={settings.moviesDestination}
+                  onChange={(e) => updateSetting("moviesDestination", e.target.value)}
+                  placeholder="/path/to/organized/Movies"
+                  className="flex-1"
+                  data-testid="input-movies-destination"
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => openFolderPicker("moviesDestination", 0)}
+                  data-testid="button-browse-movies-destination"
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Where organized movies will be moved to
+              </p>
             </div>
 
             <Separator />
@@ -316,7 +354,7 @@ export default function Settings() {
               <div className="flex items-center justify-between">
                 <Label className="flex items-center gap-2 text-base">
                   <Tv className="h-4 w-4 text-purple-500" />
-                  TV Shows Folders
+                  TV Shows Source Folders
                 </Label>
                 <Button
                   variant="outline"
@@ -358,11 +396,33 @@ export default function Settings() {
                   </div>
                 ))}
               </div>
-              {settings.tvShowsPaths.length > 1 && (
-                <p className="text-xs text-muted-foreground">
-                  First folder is the default destination for organized TV shows
-                </p>
-              )}
+            </div>
+
+            <div className="space-y-4">
+              <Label className="flex items-center gap-2 text-base">
+                <Tv className="h-4 w-4 text-purple-500" />
+                TV Shows Destination
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  value={settings.tvShowsDestination}
+                  onChange={(e) => updateSetting("tvShowsDestination", e.target.value)}
+                  placeholder="/path/to/organized/TV Shows"
+                  className="flex-1"
+                  data-testid="input-tvshows-destination"
+                />
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => openFolderPicker("tvShowsDestination", 0)}
+                  data-testid="button-browse-tvshows-destination"
+                >
+                  <Search className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Where organized TV shows will be moved to
+              </p>
             </div>
           </CardContent>
         </Card>
