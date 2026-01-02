@@ -122,11 +122,55 @@ function parseMediaFilename(filename: string): {
   };
 }
 
-function generateDestinationPath(
+// Helper: normalize series name for consistent matching
+function normalizeSeriesName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+}
+
+// Helper: get canonical series folder name
+async function getCanonicalSeriesFolder(
+  detectedName: string,
+  year: number | null,
+  basePath: string
+): Promise<string> {
+  const normalizedInput = normalizeSeriesName(detectedName);
+  
+  // Check if we have an existing TV series with matching name
+  const existingSeries = await storage.getAllTvSeries();
+  
+  for (const series of existingSeries) {
+    const normalizedExisting = normalizeSeriesName(series.name);
+    
+    // Check for match (with some fuzzy tolerance)
+    if (normalizedInput === normalizedExisting || 
+        normalizedInput.includes(normalizedExisting) || 
+        normalizedExisting.includes(normalizedInput)) {
+      // Reuse existing folder path if available
+      if (series.folderPath) {
+        return series.folderPath;
+      }
+      // Otherwise use existing series name for consistency
+      const yearStr = series.year ? ` (${series.year})` : "";
+      return `${series.name}${yearStr}`;
+    }
+  }
+  
+  // No existing series found, create new folder name
+  const titleCase = (str: string) =>
+    str.replace(/\b\w/g, (c) => c.toUpperCase());
+  const formattedName = titleCase(detectedName);
+  const yearStr = year ? ` (${year})` : "";
+  return `${formattedName}${yearStr}`;
+}
+
+async function generateDestinationPath(
   parsed: ReturnType<typeof parseMediaFilename>,
   detectedName: string,
   basePaths: { movies: string; tvshows: string }
-): string {
+): Promise<string> {
   const { detectedType, year, season, episode, extension } = parsed;
 
   const titleCase = (str: string) =>
@@ -142,10 +186,14 @@ function generateDestinationPath(
   }
 
   if (detectedType === "tvshow" && season !== null && episode !== null) {
-    const seriesFolder = `${formattedName}${yearStr}`;
+    // Get canonical series folder (reuses existing if available)
+    const seriesFolder = await getCanonicalSeriesFolder(detectedName, year, basePaths.tvshows);
     const seasonFolder = `Season ${season.toString().padStart(2, "0")}`;
     const episodeStr = `S${season.toString().padStart(2, "0")}E${episode.toString().padStart(2, "0")}`;
-    const fileName = `${formattedName} - ${episodeStr}${extension}`;
+    
+    // Extract just the series name for the filename (from the folder name)
+    const seriesNameForFile = seriesFolder.replace(/\s*\(\d{4}\)$/, "");
+    const fileName = `${seriesNameForFile} - ${episodeStr}${extension}`;
     return `${basePaths.tvshows}/${seriesFolder}/${seasonFolder}/${fileName}`;
   }
 
@@ -279,7 +327,7 @@ export async function registerRoutes(
         const moviesPath = settings.moviesPath || "/Movies";
         const tvShowsPath = settings.tvShowsPath || "/TV Shows";
 
-        const destinationPath = generateDestinationPath(parsed, parsed.detectedName, {
+        const destinationPath = await generateDestinationPath(parsed, parsed.detectedName, {
           movies: moviesPath,
           tvshows: tvShowsPath,
         });
@@ -389,7 +437,7 @@ export async function registerRoutes(
           }
 
           const parsed = parseMediaFilename(filename);
-          const destinationPath = generateDestinationPath(parsed, parsed.detectedName, {
+          const destinationPath = await generateDestinationPath(parsed, parsed.detectedName, {
             movies: defaultMoviesPath,
             tvshows: defaultTvShowsPath,
           });
