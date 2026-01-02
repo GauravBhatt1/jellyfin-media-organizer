@@ -332,6 +332,56 @@ async function getCanonicalSeriesFolder(
   return `${formattedName}${yearStr}`;
 }
 
+// Helper: Move file to destination with folder creation
+async function moveFileToDestination(
+  sourcePath: string,
+  destinationPath: string,
+  isDocker: boolean = false
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // In Docker, paths need HOST_PREFIX for actual filesystem access
+    const HOST_PREFIX = "/host";
+    const actualSource = isDocker ? `${HOST_PREFIX}${sourcePath}` : sourcePath;
+    const actualDest = isDocker ? `${HOST_PREFIX}${destinationPath}` : destinationPath;
+    
+    // Check if source exists
+    try {
+      await fs.promises.access(actualSource, fs.constants.R_OK);
+    } catch {
+      return { success: false, error: `Source file not found: ${sourcePath}` };
+    }
+    
+    // Create destination directory
+    const destDir = path.dirname(actualDest);
+    await fs.promises.mkdir(destDir, { recursive: true });
+    
+    // Check if destination already exists
+    try {
+      await fs.promises.access(actualDest);
+      return { success: false, error: `Destination already exists: ${destinationPath}` };
+    } catch {
+      // Good - destination doesn't exist
+    }
+    
+    // Move file (rename if same filesystem, copy+delete otherwise)
+    try {
+      await fs.promises.rename(actualSource, actualDest);
+    } catch (renameErr: any) {
+      // If rename fails (cross-device), copy then delete
+      if (renameErr.code === 'EXDEV') {
+        await fs.promises.copyFile(actualSource, actualDest);
+        await fs.promises.unlink(actualSource);
+      } else {
+        throw renameErr;
+      }
+    }
+    
+    return { success: true };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Unknown error' };
+  }
+}
+
 async function generateDestinationPath(
   parsed: ReturnType<typeof parseMediaFilename>,
   detectedName: string,
@@ -834,7 +884,7 @@ export async function registerRoutes(
     }
   });
 
-  // Organize endpoint
+  // Organize endpoint - actually moves files to destination
   app.post("/api/organize", async (req, res) => {
     try {
       const { ids } = req.body;
@@ -842,14 +892,46 @@ export async function registerRoutes(
         return res.status(400).json({ error: "ids must be an array" });
       }
 
+      // Detect if running in Docker
+      const isDocker = fs.existsSync("/host");
+      
       const organized = [];
+      const failed = [];
 
       for (const id of ids) {
         const item = await storage.getMediaItemById(id);
         if (!item) continue;
+        if (!item.originalPath || !item.destinationPath) {
+          failed.push({ id, error: "Missing source or destination path" });
+          continue;
+        }
 
-        // Update item status
-        await storage.updateMediaItem(id, { status: "organized" });
+        // Actually move the file
+        const moveResult = await moveFileToDestination(
+          item.originalPath,
+          item.destinationPath,
+          isDocker
+        );
+
+        if (!moveResult.success) {
+          // Log failure but continue with other files
+          await storage.createLog({
+            mediaItemId: id,
+            action: "organize",
+            fromPath: item.originalPath,
+            toPath: item.destinationPath,
+            success: false,
+            message: `Failed to move: ${moveResult.error}`,
+          });
+          failed.push({ id, error: moveResult.error });
+          continue;
+        }
+
+        // Update item status after successful move
+        await storage.updateMediaItem(id, { 
+          status: "organized",
+          originalPath: item.destinationPath // Update path to new location
+        });
 
         // Create movie or TV series entry
         if (item.detectedType === "movie" && item.detectedName) {
@@ -863,9 +945,9 @@ export async function registerRoutes(
             });
           }
         } else if (item.detectedType === "tvshow" && item.detectedName) {
-          // Extract series folder name from destination path (e.g., "/TV Shows/Ashram (2020)/Season 01/..." -> "Ashram (2020)")
+          // Extract series folder name from destination path
           const pathParts = item.destinationPath?.split("/").filter(Boolean) || [];
-          const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null; // Second part after TV Shows
+          const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null;
           
           let series = await storage.getTvSeriesByName(item.detectedName);
           if (!series) {
@@ -875,34 +957,38 @@ export async function registerRoutes(
               year: item.year,
               totalSeasons: item.season || 1,
               totalEpisodes: 1,
-              folderPath: seriesFolderName, // Store just the folder name
+              folderPath: seriesFolderName,
             });
           } else {
-            // Update total seasons/episodes and ensure folderPath is set
             await storage.updateTvSeries(series.id, {
               totalSeasons: Math.max(series.totalSeasons || 0, item.season || 0),
               totalEpisodes: (series.totalEpisodes || 0) + 1,
-              folderPath: series.folderPath || seriesFolderName, // Set if not already set
+              folderPath: series.folderPath || seriesFolderName,
             });
           }
         }
 
-        // Create log
+        // Create success log
         await storage.createLog({
           mediaItemId: id,
           action: "organize",
           fromPath: item.originalPath,
           toPath: item.destinationPath,
           success: true,
-          message: `Organized ${item.detectedType}: ${item.detectedName}`,
+          message: `Moved ${item.detectedType}: ${item.detectedName}`,
         });
 
         organized.push(id);
       }
 
-      res.json({ organized: organized.length });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to organize files" });
+      res.json({ 
+        organized: organized.length, 
+        failed: failed.length,
+        errors: failed 
+      });
+    } catch (error: any) {
+      console.error("Organize error:", error);
+      res.status(500).json({ error: "Failed to organize files", details: error.message });
     }
   });
 
