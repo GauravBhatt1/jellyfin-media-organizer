@@ -118,12 +118,17 @@ function extractSeriesTokens(tokens: string[]): string[] {
     if (/^s\d{1,2}$/i.test(token)) break;
     // Stop at 1x01 pattern
     if (/^\d{1,2}x\d{1,3}$/i.test(token)) break;
-    // Stop at quality/release tags (normalized comparison) - only after we have some title
+    
+    // Skip leading quality/release tags (before we have real title tokens)
+    const isReleaseGroup = RELEASE_GROUPS.some(g => lower === g.toLowerCase());
+    if (!hasNonNumericToken && (isQualityTag(token) || isReleaseGroup)) continue;
+    
+    // Stop at quality/release tags (after we have title tokens)
     if (hasNonNumericToken && isQualityTag(token)) break;
     // Stop at year in parentheses style (only after we have title tokens)
     if (/^(19|20)\d{2}$/.test(token) && hasNonNumericToken) break;
     // Stop at release group patterns (only after we have title tokens)
-    if (hasNonNumericToken && RELEASE_GROUPS.some(g => lower === g.toLowerCase())) break;
+    if (hasNonNumericToken && isReleaseGroup) break;
     // Stop at pure numbers that look like episode numbers (only after we have non-numeric tokens)
     if (isNumeric && hasNonNumericToken && parseInt(token) <= 50) break;
     
