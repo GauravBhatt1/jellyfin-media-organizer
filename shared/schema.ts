@@ -67,12 +67,27 @@ export const settings = pgTable("settings", {
   value: text("value").notNull(),
 });
 
+// Scan Jobs - background scan tracking
+export type ScanJobStatus = "pending" | "running" | "completed" | "failed";
+export const scanJobs = pgTable("scan_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  status: text("status").$type<ScanJobStatus>().default("pending"),
+  totalFiles: integer("total_files").default(0),
+  processedFiles: integer("processed_files").default(0),
+  newItems: integer("new_items").default(0),
+  currentFolder: text("current_folder"),
+  error: text("error"),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+});
+
 // Insert schemas
 export const insertMediaItemSchema = createInsertSchema(mediaItems).omit({ id: true, createdAt: true });
 export const insertTvSeriesSchema = createInsertSchema(tvSeries).omit({ id: true });
 export const insertMovieSchema = createInsertSchema(movies).omit({ id: true });
 export const insertOrganizationLogSchema = createInsertSchema(organizationLogs).omit({ id: true, createdAt: true });
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
+export const insertScanJobSchema = createInsertSchema(scanJobs).omit({ id: true, startedAt: true, completedAt: true });
 
 // Types
 export type MediaItem = typeof mediaItems.$inferSelect;
@@ -85,6 +100,8 @@ export type OrganizationLog = typeof organizationLogs.$inferSelect;
 export type InsertOrganizationLog = z.infer<typeof insertOrganizationLogSchema>;
 export type Settings = typeof settings.$inferSelect;
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
+export type ScanJob = typeof scanJobs.$inferSelect;
+export type InsertScanJob = z.infer<typeof insertScanJobSchema>;
 
 // Common release groups/sites to clean from filenames
 export const RELEASE_GROUPS = [
