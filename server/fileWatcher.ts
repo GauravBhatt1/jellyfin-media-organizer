@@ -167,7 +167,9 @@ async function processNewFile(filePath: string, moviesPath: string, tvShowsPath:
     });
 
     const isDocker = fs.existsSync(HOST_PREFIX);
-    const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
+    const userPath = isDocker && filePath.startsWith(HOST_PREFIX) 
+      ? filePath.slice(HOST_PREFIX.length) 
+      : filePath;
 
     await storage.createMediaItem({
       originalFilename: filename,
@@ -299,7 +301,7 @@ export function getWatcherStatus() {
     watchedPaths: state.watchedPaths,
     filesDetected: state.filesDetected,
     filesProcessed: state.filesProcessed,
-    lastActivity: state.lastActivity,
+    lastActivity: state.lastActivity ? state.lastActivity.toISOString() : null,
     recentErrors: state.errors.slice(-5),
   };
 }
