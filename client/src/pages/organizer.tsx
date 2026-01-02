@@ -12,6 +12,9 @@ import {
   FolderOpen,
   ChevronRight,
   AlertCircle,
+  TestTube2,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,10 +38,18 @@ interface OrganizationPreview {
   year?: number;
 }
 
+interface TestResult {
+  id: string;
+  status: 'verified' | 'failed';
+  error?: string;
+}
+
 export default function Organizer() {
   const { toast } = useToast();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [isOrganizing, setIsOrganizing] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [organizeProgress, setOrganizeProgress] = useState({ current: 0, total: 0 });
 
   const { data: pendingItems, isLoading } = useQuery<MediaItem[]>({
@@ -87,6 +98,73 @@ export default function Organizer() {
         description: `${successCount} files have been organized.`,
       });
     }
+  };
+
+  // Test run - verify paths without moving files
+  const handleTestRun = async () => {
+    if (!preview || preview.length === 0) return;
+    
+    setIsTesting(true);
+    setTestResults([]);
+    
+    try {
+      const response = await apiRequest("POST", "/api/organize", { 
+        ids: preview.map(p => p.id),
+        dryRun: true 
+      });
+      const data = await response.json();
+      
+      const results: TestResult[] = [];
+      
+      // Add verified items
+      if (data.organized && Array.isArray(data.organized)) {
+        for (const item of data.organized) {
+          results.push({ id: item.id, status: 'verified' });
+        }
+      } else if (typeof data.organized === 'number') {
+        // Old format - all verified
+        preview.slice(0, data.organized).forEach(p => {
+          results.push({ id: p.id, status: 'verified' });
+        });
+      }
+      
+      // Add failed items
+      if (data.errors && Array.isArray(data.errors)) {
+        for (const err of data.errors) {
+          results.push({ id: err.id, status: 'failed', error: err.error });
+        }
+      }
+      
+      setTestResults(results);
+      
+      const failedCount = results.filter(r => r.status === 'failed').length;
+      const verifiedCount = results.filter(r => r.status === 'verified').length;
+      
+      if (failedCount > 0) {
+        toast({
+          title: "Test Run Complete - Issues Found",
+          description: `${verifiedCount} verified, ${failedCount} failed. Check errors before organizing.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Test Run Successful",
+          description: `All ${verifiedCount} files verified. Safe to organize!`,
+        });
+      }
+    } catch (err) {
+      toast({
+        title: "Test Run Failed",
+        description: "Could not verify paths. Check settings.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const getTestStatus = (id: string) => {
+    return testResults.find(r => r.id === id);
   };
 
   const organizeMutation = useMutation({
@@ -191,6 +269,19 @@ export default function Organizer() {
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button
+            variant="secondary"
+            onClick={handleTestRun}
+            disabled={!preview || preview.length === 0 || isTesting || isOrganizing}
+            data-testid="button-test-run"
+          >
+            {isTesting ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <TestTube2 className="h-4 w-4 mr-2" />
+            )}
+            Test Run
+          </Button>
+          <Button
             variant="outline"
             onClick={handleOrganize}
             disabled={selectedItems.size === 0 || organizeMutation.isPending}
@@ -285,7 +376,18 @@ export default function Organizer() {
                                 {item.year}
                               </Badge>
                             )}
+                            {getTestStatus(item.id)?.status === 'verified' && (
+                              <CheckCircle2 className="h-4 w-4 text-green-500" />
+                            )}
+                            {getTestStatus(item.id)?.status === 'failed' && (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            )}
                           </div>
+                          {getTestStatus(item.id)?.error && (
+                            <p className="text-xs text-red-500">
+                              {getTestStatus(item.id)?.error}
+                            </p>
+                          )}
                           <p className="text-xs text-muted-foreground font-mono truncate">
                             {item.originalFilename}
                           </p>
