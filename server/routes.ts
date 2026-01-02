@@ -79,17 +79,29 @@ function tokenizeFilename(filename: string): string[] {
   return name.split(/\s+/).filter(t => t.length > 0);
 }
 
-// Quality and release tags to remove
+// Quality and release tags to remove (all lowercase for normalized comparison)
 const QUALITY_TAGS = new Set([
   '720p', '1080p', '2160p', '4k', 'hdtv', 'web', 'webrip', 'webdl', 'web-dl',
   'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdrip', 'hdtvrip',
   'x264', 'x265', 'hevc', 'h264', 'h265', 'avc',
-  'aac', 'ac3', 'dts', 'ddp', 'ddp5', 'dd5', 'atmos', 'truehd',
+  'aac', 'ac3', 'dts', 'ddp', 'ddp5', 'dd5', 'ddp51', 'atmos', 'truehd',
   'proper', 'repack', 'internal', 'readnfo', 'extended', 'uncut', 'unrated',
   '10bit', '8bit', 'hdr', 'hdr10', 'sdr', 'dv', 'dolby', 'vision',
   'amzn', 'nf', 'hmax', 'dsnp', 'atvp', 'pcok', 'hulu',
-  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks'
+  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks',
+  '1', '2', '3', '4', '5', '6', '7', '8', '9', '10' // Common standalone episode numbers
 ]);
+
+// Normalize token for quality tag matching (remove dots, lowercase)
+function normalizeToken(token: string): string {
+  return token.toLowerCase().replace(/[.\-]/g, '');
+}
+
+// Check if token is a quality/release tag
+function isQualityTag(token: string): boolean {
+  const normalized = normalizeToken(token);
+  return QUALITY_TAGS.has(normalized);
+}
 
 // Get tokens before any S01E01 pattern or quality tags
 function extractSeriesTokens(tokens: string[]): string[] {
@@ -105,12 +117,14 @@ function extractSeriesTokens(tokens: string[]): string[] {
     if (/^s\d{1,2}$/i.test(token)) break;
     // Stop at 1x01 pattern
     if (/^\d{1,2}x\d{1,3}$/i.test(token)) break;
-    // Stop at quality/release tags
-    if (QUALITY_TAGS.has(lower)) break;
+    // Stop at quality/release tags (normalized comparison)
+    if (isQualityTag(token)) break;
     // Stop at year in parentheses style (already removed parens)
     if (/^(19|20)\d{2}$/.test(token) && i > 0) break;
     // Stop at release group patterns
     if (RELEASE_GROUPS.some(g => lower === g.toLowerCase())) break;
+    // Stop at pure numbers (likely episode numbers)
+    if (/^\d{1,3}$/.test(token) && i > 0) break;
     
     result.push(token);
   }
@@ -163,6 +177,7 @@ function extractSeriesName(filename: string): string {
 }
 
 // Batch consensus: find series name from multiple filenames
+// Only returns consensus if high overlap across files (avoids mixed directory issues)
 function findSeriesNameByConsensus(filenames: string[]): string | null {
   if (filenames.length < 2) return null;
   
@@ -175,14 +190,36 @@ function findSeriesNameByConsensus(filenames: string[]): string | null {
   
   const commonPrefix = longestCommonPrefix(tokenArrays);
   
-  // Need at least 2 words for a valid series name
-  if (commonPrefix.length >= 2) {
-    return commonPrefix.map(t => 
-      t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
-    ).join(" ");
+  // Need at least 2 non-numeric words for a valid series name
+  const meaningfulPrefix = commonPrefix.filter(t => !/^\d+$/.test(t));
+  if (meaningfulPrefix.length < 2) return null;
+  
+  // Guard: only use consensus if at least 70% of files share this prefix
+  // This prevents applying wrong names to mixed directories
+  const minOverlap = Math.ceil(tokenArrays.length * 0.7);
+  let matchCount = 0;
+  
+  for (const tokens of tokenArrays) {
+    let matches = true;
+    for (let i = 0; i < commonPrefix.length; i++) {
+      if (i >= tokens.length || tokens[i].toLowerCase() !== commonPrefix[i].toLowerCase()) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) matchCount++;
   }
   
-  return null;
+  if (matchCount < minOverlap) return null;
+  
+  // Guard: prefix should be at least 3 characters total
+  const seriesName = meaningfulPrefix.map(t => 
+    t.charAt(0).toUpperCase() + t.slice(1).toLowerCase()
+  ).join(" ");
+  
+  if (seriesName.length < 3) return null;
+  
+  return seriesName;
 }
 
 function parseMediaFilename(filename: string): {
