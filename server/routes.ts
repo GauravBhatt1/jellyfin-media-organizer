@@ -87,8 +87,13 @@ const QUALITY_TAGS = new Set([
   'aac', 'ac3', 'dts', 'ddp', 'ddp5', 'dd5', 'ddp51', 'atmos', 'truehd',
   'proper', 'repack', 'internal', 'readnfo', 'extended', 'uncut', 'unrated',
   '10bit', '8bit', 'hdr', 'hdr10', 'sdr', 'dv', 'dolby', 'vision',
-  'amzn', 'nf', 'hmax', 'dsnp', 'atvp', 'pcok', 'hulu',
-  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks'
+  'amzn', 'nf', 'hmax', 'dsnp', 'atvp', 'pcok', 'hulu', 'max',
+  // Release groups / uploaders
+  'telly', 'yts', 'rarbg', 'eztv', 'ettv', 'lol', 'dimension', 'sparks',
+  'ntg', 'ntb', 'flux', 'phoenix', 'ggez', 'ggwp', 'cakes', 'gossip', 
+  'glhf', 'cmrg', 'sigma', 'mkvcage', 'pahe', 'psa', 'tepes',
+  'successors', 'hone', 'evo', 'fgt', 'yify', 'galactica', 'memento',
+  'syncopy', 'nogrp', 'ion10', 'playwave', 'frds', 'npms', 'deejayahmed'
 ]);
 
 // Normalize token for quality tag matching (remove dots, lowercase)
