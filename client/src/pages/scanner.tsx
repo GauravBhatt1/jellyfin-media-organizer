@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   FolderSearch,
@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { MediaItem } from "@shared/schema";
+import type { MediaItem, ScanJob } from "@shared/schema";
 
 interface PaginatedResponse {
   items: MediaItem[];
@@ -47,9 +47,16 @@ interface PaginatedResponse {
   };
 }
 
+interface ScanResponse {
+  jobId: string;
+  status: string;
+  message: string;
+}
+
 export default function Scanner() {
   const { toast } = useToast();
   const [page, setPage] = useState(1);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const limit = 50;
 
   const { data, isLoading } = useQuery<PaginatedResponse>({
@@ -60,26 +67,61 @@ export default function Scanner() {
     },
   });
 
-  const items = data?.items || [];
-  const pagination = data?.pagination;
-
-  const scanFolderMutation = useMutation({
-    mutationFn: async () => {
-      const response = await apiRequest("POST", "/api/scan-folder", {});
-      return response.json();
+  // Poll for active scan job status
+  const { data: scanJob } = useQuery<ScanJob | null>({
+    queryKey: ["/api/scan-jobs", activeJobId],
+    queryFn: async () => {
+      if (!activeJobId) return null;
+      const res = await fetch(`/api/scan-jobs/${activeJobId}`);
+      if (!res.ok) return null;
+      return res.json();
     },
-    onSuccess: (data) => {
+    enabled: !!activeJobId,
+    refetchInterval: activeJobId ? 1000 : false, // Poll every second while scanning
+  });
+
+  // Handle scan completion
+  useEffect(() => {
+    if (scanJob?.status === "completed") {
+      setActiveJobId(null);
       queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
       toast({
         title: "Library Scan Complete",
-        description: `Found ${data.scanned} video files, ${data.newItems} new items added.`,
+        description: `Processed ${scanJob.totalFiles} files, ${scanJob.newItems} new items added.`,
+      });
+    } else if (scanJob?.status === "failed") {
+      setActiveJobId(null);
+      toast({
+        title: "Scan Failed",
+        description: scanJob.error || "An error occurred during scanning.",
+        variant: "destructive",
+      });
+    }
+  }, [scanJob?.status, scanJob?.totalFiles, scanJob?.newItems, scanJob?.error, toast]);
+
+  const items = data?.items || [];
+  const pagination = data?.pagination;
+
+  const isScanning = !!activeJobId && (scanJob?.status === "pending" || scanJob?.status === "running");
+  const scanProgress = scanJob?.totalFiles ? Math.round((scanJob.processedFiles || 0) / scanJob.totalFiles * 100) : 0;
+
+  const scanFolderMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/scan-folder", {});
+      return response.json() as Promise<ScanResponse>;
+    },
+    onSuccess: (data) => {
+      setActiveJobId(data.jobId);
+      toast({
+        title: "Scan Started",
+        description: "Scanning files in the background...",
       });
     },
     onError: (error: Error) => {
       toast({
         title: "Scan Failed",
-        description: error.message || "Could not scan the source folder.",
+        description: error.message || "Could not start the scan.",
         variant: "destructive",
       });
     },
@@ -141,10 +183,10 @@ export default function Scanner() {
         </div>
         <Button 
           onClick={() => scanFolderMutation.mutate()}
-          disabled={scanFolderMutation.isPending}
+          disabled={scanFolderMutation.isPending || isScanning}
           data-testid="button-scan-library"
         >
-          {scanFolderMutation.isPending ? (
+          {scanFolderMutation.isPending || isScanning ? (
             <>
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               Scanning...
@@ -157,6 +199,30 @@ export default function Scanner() {
           )}
         </Button>
       </div>
+
+      {/* Scan Progress Card */}
+      {isScanning && scanJob && (
+        <Card data-testid="card-scan-progress">
+          <CardContent className="pt-6">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  <span className="font-medium">Scanning Library...</span>
+                </div>
+                <Badge variant="outline">
+                  {scanJob.processedFiles || 0} / {scanJob.totalFiles || "?"} files
+                </Badge>
+              </div>
+              <Progress value={scanProgress} className="h-2" />
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>{scanJob.currentFolder ? `Scanning: ${scanJob.currentFolder}` : "Initializing..."}</span>
+                <span>{scanJob.newItems || 0} new items found</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-2">
@@ -324,10 +390,10 @@ export default function Scanner() {
               </p>
               <Button 
                 onClick={() => scanFolderMutation.mutate()}
-                disabled={scanFolderMutation.isPending}
+                disabled={scanFolderMutation.isPending || isScanning}
                 data-testid="button-scan-first"
               >
-                {scanFolderMutation.isPending ? (
+                {scanFolderMutation.isPending || isScanning ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
                   <FolderSearch className="h-4 w-4 mr-2" />
