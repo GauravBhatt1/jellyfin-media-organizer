@@ -313,100 +313,79 @@ export async function registerRoutes(
     }
   });
 
-  // Scan actual files from all library folders
-  app.post("/api/scan-folder", async (req, res) => {
-    try {
-      const settings = await storage.getAllSettings();
-      
-      // Parse paths - support both old single path and new array format
-      let moviesPaths: string[] = [];
-      let tvShowsPaths: string[] = [];
-      
-      if (settings.moviesPaths) {
-        try {
-          moviesPaths = JSON.parse(settings.moviesPaths);
-        } catch {
-          moviesPaths = [settings.moviesPaths];
-        }
-      } else if (settings.moviesPath) {
-        moviesPaths = [settings.moviesPath];
-      }
-      
-      if (settings.tvShowsPaths) {
-        try {
-          tvShowsPaths = JSON.parse(settings.tvShowsPaths);
-        } catch {
-          tvShowsPaths = [settings.tvShowsPaths];
-        }
-      } else if (settings.tvShowsPath) {
-        tvShowsPaths = [settings.tvShowsPath];
-      }
-      
-      // Combine all paths to scan
-      const allPaths = [...moviesPaths, ...tvShowsPaths].filter(p => p && p.trim());
-      
-      if (allPaths.length === 0) {
-        return res.status(400).json({ 
-          error: "No library folders configured. Please add folders in Settings." 
-        });
-      }
+  // Background scan job system
+  const BATCH_SIZE = 50; // Process 50 files at a time
+  const VIDEO_EXTENSIONS = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.webm', '.flv', '.ts', '.m2ts'];
+  const HOST_PREFIX = "/host";
 
-      // In Docker, VPS root is mounted at /host
-      const HOST_PREFIX = "/host";
-      const isDocker = fs.existsSync(HOST_PREFIX);
-
-      // Video file extensions
-      const videoExtensions = ['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.webm', '.flv', '.ts', '.m2ts'];
-      
-      // Recursively find all video files
-      const findVideoFiles = (dir: string, files: string[] = []): string[] => {
-        try {
-          const entries = fs.readdirSync(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-              findVideoFiles(fullPath, files);
-            } else if (entry.isFile()) {
-              const ext = path.extname(entry.name).toLowerCase();
-              if (videoExtensions.includes(ext)) {
-                files.push(fullPath);
-              }
+  // Find all video files (lightweight - just collects paths)
+  const findVideoFilesAsync = async (dir: string): Promise<string[]> => {
+    const files: string[] = [];
+    const queue = [dir];
+    
+    while (queue.length > 0) {
+      const currentDir = queue.shift()!;
+      try {
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(currentDir, entry.name);
+          if (entry.isDirectory()) {
+            queue.push(fullPath);
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase();
+            if (VIDEO_EXTENSIONS.includes(ext)) {
+              files.push(fullPath);
             }
           }
-        } catch (e) {
-          // Skip unreadable directories
         }
-        return files;
-      };
+      } catch (e) {
+        // Skip unreadable directories
+      }
+    }
+    return files;
+  };
 
-      let totalVideoFiles = 0;
-      const results = [];
-      const scannedPaths: string[] = [];
+  // Process files in background with chunking
+  const runBackgroundScan = async (jobId: string, allPaths: string[], defaultMoviesPath: string, defaultTvShowsPath: string) => {
+    const isDocker = fs.existsSync(HOST_PREFIX);
+    let totalFiles = 0;
+    let processedFiles = 0;
+    let newItems = 0;
+    
+    try {
+      await storage.updateScanJob(jobId, { status: "running" });
+
+      // First pass: count all files
+      const allVideoFiles: Array<{filePath: string, sourcePath: string}> = [];
       
-      // Default destination paths (first in each list)
-      const defaultMoviesPath = moviesPaths[0] || "/Movies";
-      const defaultTvShowsPath = tvShowsPaths[0] || "/TV Shows";
-
       for (const sourcePath of allPaths) {
-        const actualSourcePath = isDocker 
-          ? HOST_PREFIX + sourcePath 
-          : sourcePath;
-
-        // Check if folder exists
-        if (!fs.existsSync(actualSourcePath)) {
-          continue; // Skip non-existent folders
+        const actualPath = isDocker ? HOST_PREFIX + sourcePath : sourcePath;
+        if (!fs.existsSync(actualPath)) continue;
+        
+        await storage.updateScanJob(jobId, { currentFolder: sourcePath });
+        const files = await findVideoFilesAsync(actualPath);
+        
+        for (const filePath of files) {
+          allVideoFiles.push({ filePath, sourcePath });
         }
+      }
+      
+      totalFiles = allVideoFiles.length;
+      await storage.updateScanJob(jobId, { totalFiles });
 
-        scannedPaths.push(sourcePath);
-        const videoFiles = findVideoFiles(actualSourcePath);
-        totalVideoFiles += videoFiles.length;
-
-        for (const filePath of videoFiles) {
+      // Process in batches
+      for (let i = 0; i < allVideoFiles.length; i += BATCH_SIZE) {
+        const batch = allVideoFiles.slice(i, i + BATCH_SIZE);
+        
+        for (const { filePath, sourcePath } of batch) {
           const filename = path.basename(filePath);
           
-          // Check if already scanned
+          // Check if already exists
           const existing = await storage.getMediaItemByFilename(filename);
-          if (existing) continue;
+          if (existing) {
+            processedFiles++;
+            continue;
+          }
 
           const parsed = parseMediaFilename(filename);
           const destinationPath = generateDestinationPath(parsed, parsed.detectedName, {
@@ -414,12 +393,9 @@ export async function registerRoutes(
             tvshows: defaultTvShowsPath,
           });
 
-          // Convert back to user-facing path
-          const userPath = isDocker 
-            ? filePath.replace(HOST_PREFIX, '') 
-            : filePath;
+          const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
 
-          const item = await storage.createMediaItem({
+          await storage.createMediaItem({
             originalFilename: filename,
             originalPath: userPath,
             extension: parsed.extension,
@@ -434,25 +410,128 @@ export async function registerRoutes(
             confidence: parsed.confidence,
           });
 
-          results.push(item);
+          newItems++;
+          processedFiles++;
         }
+        
+        // Update progress after each batch
+        await storage.updateScanJob(jobId, { processedFiles, newItems });
+        
+        // Small delay to prevent CPU spike
+        await new Promise(resolve => setTimeout(resolve, 10));
       }
+
+      await storage.updateScanJob(jobId, { 
+        status: "completed", 
+        completedAt: new Date(),
+        processedFiles: totalFiles,
+        newItems,
+        currentFolder: null 
+      });
 
       await storage.createLog({
         action: "scan-folder",
         success: true,
-        message: `Scanned ${scannedPaths.length} folders: found ${totalVideoFiles} video files, ${results.length} new`,
+        message: `Background scan complete: ${totalFiles} files processed, ${newItems} new items`,
+      });
+
+    } catch (error) {
+      console.error("Background scan error:", error);
+      await storage.updateScanJob(jobId, { 
+        status: "failed", 
+        error: String(error),
+        completedAt: new Date() 
+      });
+    }
+  };
+
+  // Start a new scan job
+  app.post("/api/scan-folder", async (req, res) => {
+    try {
+      // Check if scan already running
+      const activeJob = await storage.getActiveScanJob();
+      if (activeJob) {
+        return res.json({ 
+          jobId: activeJob.id, 
+          status: activeJob.status,
+          message: "Scan already in progress"
+        });
+      }
+
+      const settings = await storage.getAllSettings();
+      
+      let moviesPaths: string[] = [];
+      let tvShowsPaths: string[] = [];
+      
+      if (settings.moviesPaths) {
+        try { moviesPaths = JSON.parse(settings.moviesPaths); } 
+        catch { moviesPaths = [settings.moviesPaths]; }
+      } else if (settings.moviesPath) {
+        moviesPaths = [settings.moviesPath];
+      }
+      
+      if (settings.tvShowsPaths) {
+        try { tvShowsPaths = JSON.parse(settings.tvShowsPaths); } 
+        catch { tvShowsPaths = [settings.tvShowsPaths]; }
+      } else if (settings.tvShowsPath) {
+        tvShowsPaths = [settings.tvShowsPath];
+      }
+      
+      const allPaths = [...moviesPaths, ...tvShowsPaths].filter(p => p && p.trim());
+      
+      if (allPaths.length === 0) {
+        return res.status(400).json({ 
+          error: "No library folders configured. Please add folders in Settings." 
+        });
+      }
+
+      // Create job and respond immediately
+      const job = await storage.createScanJob({
+        status: "pending",
+        totalFiles: 0,
+        processedFiles: 0,
+        newItems: 0,
+      });
+
+      const defaultMoviesPath = moviesPaths[0] || "/Movies";
+      const defaultTvShowsPath = tvShowsPaths[0] || "/TV Shows";
+
+      // Start background scan (non-blocking)
+      setImmediate(() => {
+        runBackgroundScan(job.id, allPaths, defaultMoviesPath, defaultTvShowsPath);
       });
 
       res.json({ 
-        scanned: totalVideoFiles, 
-        newItems: results.length,
-        foldersScanned: scannedPaths.length,
-        items: results 
+        jobId: job.id, 
+        status: "pending",
+        message: "Scan started in background"
       });
     } catch (error) {
       console.error("Scan folder error:", error);
-      res.status(500).json({ error: "Failed to scan folder" });
+      res.status(500).json({ error: "Failed to start scan" });
+    }
+  });
+
+  // Get scan job status
+  app.get("/api/scan-jobs/:id", async (req, res) => {
+    try {
+      const job = await storage.getScanJob(req.params.id);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get scan job" });
+    }
+  });
+
+  // Get active scan job
+  app.get("/api/scan-jobs/active", async (req, res) => {
+    try {
+      const job = await storage.getActiveScanJob();
+      res.json(job || null);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get active scan job" });
     }
   });
 
