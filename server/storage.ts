@@ -11,6 +11,8 @@ import {
   type InsertOrganizationLog,
   type Settings,
   type InsertSettings,
+  type ScanJob,
+  type InsertScanJob,
   RELEASE_GROUPS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -73,6 +75,12 @@ export interface IStorage {
 
   // Duplicate Detection
   findDuplicates(threshold?: number): Promise<DuplicateGroup[]>;
+
+  // Scan Jobs
+  createScanJob(job: InsertScanJob): Promise<ScanJob>;
+  getScanJob(id: string): Promise<ScanJob | undefined>;
+  getActiveScanJob(): Promise<ScanJob | undefined>;
+  updateScanJob(id: string, updates: Partial<ScanJob>): Promise<ScanJob | undefined>;
 }
 
 // Helper: clean filename for comparison
@@ -152,6 +160,7 @@ export class MemStorage implements IStorage {
   private movies: Map<string, Movie>;
   private logs: Map<string, OrganizationLog>;
   private settings: Map<string, string>;
+  private scanJobs: Map<string, ScanJob>;
 
   constructor() {
     this.users = new Map();
@@ -160,6 +169,7 @@ export class MemStorage implements IStorage {
     this.movies = new Map();
     this.logs = new Map();
     this.settings = new Map();
+    this.scanJobs = new Map();
 
     // Set default settings
     this.settings.set("sourcePath", "/Inbox");
@@ -417,6 +427,37 @@ export class MemStorage implements IStorage {
     }
 
     return result;
+  }
+
+  // Scan Jobs
+  async createScanJob(job: InsertScanJob): Promise<ScanJob> {
+    const id = randomUUID();
+    const scanJob: ScanJob = {
+      ...job,
+      id,
+      startedAt: new Date(),
+      completedAt: null,
+    };
+    this.scanJobs.set(id, scanJob);
+    return scanJob;
+  }
+
+  async getScanJob(id: string): Promise<ScanJob | undefined> {
+    return this.scanJobs.get(id);
+  }
+
+  async getActiveScanJob(): Promise<ScanJob | undefined> {
+    return Array.from(this.scanJobs.values()).find(
+      (job) => job.status === "pending" || job.status === "running"
+    );
+  }
+
+  async updateScanJob(id: string, updates: Partial<ScanJob>): Promise<ScanJob | undefined> {
+    const job = this.scanJobs.get(id);
+    if (!job) return undefined;
+    const updated = { ...job, ...updates };
+    this.scanJobs.set(id, updated);
+    return updated;
   }
 }
 
