@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { RELEASE_GROUPS, type MediaType } from "@shared/schema";
 import * as fs from "fs";
 import * as path from "path";
+import { startWatcher, stopWatcher, getWatcherStatus, initWatcher } from "./fileWatcher";
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
@@ -534,6 +535,39 @@ export async function registerRoutes(
       res.status(500).json({ error: "Failed to get active scan job" });
     }
   });
+
+  // File Watcher / Monitoring endpoints
+  app.get("/api/monitoring/status", async (req, res) => {
+    try {
+      const status = getWatcherStatus();
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get monitoring status" });
+    }
+  });
+
+  app.post("/api/monitoring/start", async (req, res) => {
+    try {
+      const result = await startWatcher();
+      res.json(result);
+    } catch (error) {
+      console.error("Start monitoring error:", error);
+      res.status(500).json({ success: false, message: "Failed to start monitoring" });
+    }
+  });
+
+  app.post("/api/monitoring/stop", async (req, res) => {
+    try {
+      const result = await stopWatcher();
+      res.json(result);
+    } catch (error) {
+      console.error("Stop monitoring error:", error);
+      res.status(500).json({ success: false, message: "Failed to stop monitoring" });
+    }
+  });
+
+  // Initialize file watcher on startup (if enabled)
+  initWatcher().catch(err => console.error("Failed to init watcher:", err));
 
   // Organization preview endpoint
   app.get("/api/organize/preview", async (req, res) => {
