@@ -367,13 +367,39 @@ async function moveFileToDestination(
     try {
       await fs.promises.rename(actualSource, actualDest);
     } catch (renameErr: any) {
-      // If rename fails (cross-device), copy then delete
+      // If rename fails (cross-device), copy then delete with verification
       if (renameErr.code === 'EXDEV') {
+        // Get source file size before copy
+        const sourceStats = await fs.promises.stat(actualSource);
+        const sourceSize = sourceStats.size;
+        
+        // Copy file
         await fs.promises.copyFile(actualSource, actualDest);
+        
+        // Verify destination exists and has same size
+        try {
+          const destStats = await fs.promises.stat(actualDest);
+          if (destStats.size !== sourceSize) {
+            // Copy failed - remove incomplete destination, keep source
+            await fs.promises.unlink(actualDest).catch(() => {});
+            return { success: false, error: `Copy verification failed: size mismatch (source: ${sourceSize}, dest: ${destStats.size})` };
+          }
+        } catch (verifyErr) {
+          return { success: false, error: `Copy verification failed: destination not accessible` };
+        }
+        
+        // Only delete source after verified copy
         await fs.promises.unlink(actualSource);
       } else {
         throw renameErr;
       }
+    }
+    
+    // Final verification - ensure destination exists
+    try {
+      await fs.promises.access(actualDest, fs.constants.R_OK);
+    } catch {
+      return { success: false, error: `Move failed: destination not accessible after move` };
     }
     
     return { success: true };
