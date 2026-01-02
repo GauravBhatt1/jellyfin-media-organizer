@@ -17,6 +17,8 @@ export const mediaItems = pgTable("media_items", {
   detectedType: text("detected_type").$type<MediaType>().default("unknown"),
   detectedName: text("detected_name"),
   cleanedName: text("cleaned_name"),
+  tmdbId: integer("tmdb_id"),
+  tmdbName: text("tmdb_name"),
   year: integer("year"),
   season: integer("season"),
   episode: integer("episode"),
