@@ -1050,15 +1050,17 @@ export async function registerRoutes(
   });
 
   // Organize endpoint - actually moves files to destination
+  // dryRun=true will only verify paths without moving
   app.post("/api/organize", async (req, res) => {
     try {
-      const { ids } = req.body;
+      const { ids, dryRun = false } = req.body;
       if (!Array.isArray(ids)) {
         return res.status(400).json({ error: "ids must be an array" });
       }
 
       // Detect if running in Docker
       const isDocker = fs.existsSync("/host");
+      const HOST_PREFIX = "/host";
       
       const organized = [];
       const failed = [];
@@ -1068,6 +1070,37 @@ export async function registerRoutes(
         if (!item) continue;
         if (!item.originalPath || !item.destinationPath) {
           failed.push({ id, error: "Missing source or destination path" });
+          continue;
+        }
+
+        // In dry run mode, just verify source exists and destination is writable
+        if (dryRun) {
+          const actualSource = isDocker ? `${HOST_PREFIX}${item.originalPath}` : item.originalPath;
+          const actualDestDir = isDocker 
+            ? `${HOST_PREFIX}${path.dirname(item.destinationPath)}` 
+            : path.dirname(item.destinationPath);
+          
+          // Check source exists
+          try {
+            await fs.promises.access(actualSource, fs.constants.R_OK);
+          } catch {
+            failed.push({ id, error: `Source not found: ${item.originalPath}` });
+            continue;
+          }
+          
+          // Check destination directory is writable (create test dir)
+          try {
+            await fs.promises.mkdir(actualDestDir, { recursive: true });
+            // Test write access by creating and removing temp file
+            const testFile = path.join(actualDestDir, `.write_test_${Date.now()}`);
+            await fs.promises.writeFile(testFile, 'test');
+            await fs.promises.unlink(testFile);
+          } catch (err: any) {
+            failed.push({ id, error: `Destination not writable: ${err.message}` });
+            continue;
+          }
+          
+          organized.push({ id, status: 'verified', from: item.originalPath, to: item.destinationPath });
           continue;
         }
 
@@ -1162,9 +1195,10 @@ export async function registerRoutes(
       }
 
       res.json({ 
-        organized: organized.length, 
+        organized: dryRun ? organized : organized.length, 
         failed: failed.length,
-        errors: failed 
+        errors: failed,
+        dryRun
       });
     } catch (error: any) {
       console.error("Organize error:", error);
