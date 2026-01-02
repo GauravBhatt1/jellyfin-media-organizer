@@ -923,12 +923,13 @@ export async function registerRoutes(
         newItems: 0,
       });
 
-      const defaultMoviesPath = moviesPaths[0] || "/Movies";
-      const defaultTvShowsPath = tvShowsPaths[0] || "/TV Shows";
+      // Use separate destination paths (not source paths)
+      const moviesDestination = settings.moviesDestination || "/Movies/Organized";
+      const tvShowsDestination = settings.tvShowsDestination || "/TV Shows/Organized";
 
       // Start background scan (non-blocking)
       setImmediate(() => {
-        runBackgroundScan(job.id, allPaths, defaultMoviesPath, defaultTvShowsPath);
+        runBackgroundScan(job.id, allPaths, moviesDestination, tvShowsDestination);
       });
 
       res.json({ 
@@ -1317,6 +1318,8 @@ export async function registerRoutes(
       res.json({
         moviesPaths,
         tvShowsPaths,
+        moviesDestination: settings.moviesDestination || "/Movies/Organized",
+        tvShowsDestination: settings.tvShowsDestination || "/TV Shows/Organized",
         autoOrganize: settings.autoOrganize === "true",
         removeReleaseGroups: settings.removeReleaseGroups !== "false",
         fuzzyMatchThreshold: parseInt(settings.fuzzyMatchThreshold || "80", 10),
@@ -1332,6 +1335,8 @@ export async function registerRoutes(
       const {
         moviesPaths,
         tvShowsPaths,
+        moviesDestination,
+        tvShowsDestination,
         autoOrganize,
         removeReleaseGroups,
         fuzzyMatchThreshold,
@@ -1344,6 +1349,13 @@ export async function registerRoutes(
       }
       if (tvShowsPaths !== undefined) {
         await storage.setSetting("tvShowsPaths", JSON.stringify(tvShowsPaths));
+      }
+      // Store destination paths
+      if (moviesDestination !== undefined) {
+        await storage.setSetting("moviesDestination", moviesDestination);
+      }
+      if (tvShowsDestination !== undefined) {
+        await storage.setSetting("tvShowsDestination", tvShowsDestination);
       }
       if (autoOrganize !== undefined)
         await storage.setSetting("autoOrganize", String(autoOrganize));
