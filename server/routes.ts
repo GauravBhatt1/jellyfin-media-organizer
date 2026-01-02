@@ -130,11 +130,10 @@ function normalizeSeriesName(name: string): string {
     .trim();
 }
 
-// Helper: get canonical series folder name
+// Helper: get canonical series folder name (returns just the folder name, not full path)
 async function getCanonicalSeriesFolder(
   detectedName: string,
-  year: number | null,
-  basePath: string
+  year: number | null
 ): Promise<string> {
   const normalizedInput = normalizeSeriesName(detectedName);
   
@@ -148,8 +147,9 @@ async function getCanonicalSeriesFolder(
     if (normalizedInput === normalizedExisting || 
         normalizedInput.includes(normalizedExisting) || 
         normalizedExisting.includes(normalizedInput)) {
-      // Reuse existing folder path if available
+      // Reuse existing folder name if available (just the folder name, not full path)
       if (series.folderPath) {
+        // folderPath stores just the folder name like "Ashram (2020)"
         return series.folderPath;
       }
       // Otherwise use existing series name for consistency
@@ -186,8 +186,8 @@ async function generateDestinationPath(
   }
 
   if (detectedType === "tvshow" && season !== null && episode !== null) {
-    // Get canonical series folder (reuses existing if available)
-    const seriesFolder = await getCanonicalSeriesFolder(detectedName, year, basePaths.tvshows);
+    // Get canonical series folder name (reuses existing if available)
+    const seriesFolder = await getCanonicalSeriesFolder(detectedName, year);
     const seasonFolder = `Season ${season.toString().padStart(2, "0")}`;
     const episodeStr = `S${season.toString().padStart(2, "0")}E${episode.toString().padStart(2, "0")}`;
     
@@ -670,6 +670,10 @@ export async function registerRoutes(
             });
           }
         } else if (item.detectedType === "tvshow" && item.detectedName) {
+          // Extract series folder name from destination path (e.g., "/TV Shows/Ashram (2020)/Season 01/..." -> "Ashram (2020)")
+          const pathParts = item.destinationPath?.split("/").filter(Boolean) || [];
+          const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null; // Second part after TV Shows
+          
           let series = await storage.getTvSeriesByName(item.detectedName);
           if (!series) {
             series = await storage.createTvSeries({
@@ -678,12 +682,14 @@ export async function registerRoutes(
               year: item.year,
               totalSeasons: item.season || 1,
               totalEpisodes: 1,
+              folderPath: seriesFolderName, // Store just the folder name
             });
           } else {
-            // Update total seasons/episodes
+            // Update total seasons/episodes and ensure folderPath is set
             await storage.updateTvSeries(series.id, {
               totalSeasons: Math.max(series.totalSeasons || 0, item.season || 0),
               totalEpisodes: (series.totalEpisodes || 0) + 1,
+              folderPath: series.folderPath || seriesFolderName, // Set if not already set
             });
           }
         }
