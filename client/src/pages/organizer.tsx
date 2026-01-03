@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   FolderTree,
   ArrowRight,
@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { MediaItem } from "@shared/schema";
@@ -44,13 +45,25 @@ interface TestResult {
   error?: string;
 }
 
+interface OrganizeJob {
+  id: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  totalFiles: number;
+  processedFiles: number;
+  successCount: number;
+  failedCount: number;
+  currentFile: string | null;
+  error: string | null;
+}
+
 export default function Organizer() {
   const { toast } = useToast();
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [isOrganizing, setIsOrganizing] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<TestResult[]>([]);
-  const [organizeProgress, setOrganizeProgress] = useState({ current: 0, total: 0 });
+  const [organizeJob, setOrganizeJob] = useState<OrganizeJob | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: pendingItems, isLoading } = useQuery<MediaItem[]>({
     queryKey: ["/api/media-items", "pending"],
@@ -60,42 +73,123 @@ export default function Organizer() {
     queryKey: ["/api/organize/preview"],
   });
 
-  // Organize files in batches to avoid timeout
-  const organizeInBatches = async (ids: string[]) => {
-    const BATCH_SIZE = 25;
-    setIsOrganizing(true);
-    setOrganizeProgress({ current: 0, total: ids.length });
-    
-    let successCount = 0;
-    let errorCount = 0;
-    
-    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-      const batch = ids.slice(i, i + BATCH_SIZE);
+  // Check for active organize job on mount
+  useEffect(() => {
+    const checkActiveJob = async () => {
       try {
-        await apiRequest("POST", "/api/organize", { ids: batch });
-        successCount += batch.length;
+        const response = await fetch("/api/organize-jobs");
+        const job = await response.json();
+        if (job && (job.status === "running" || job.status === "pending")) {
+          setOrganizeJob(job);
+          setIsOrganizing(true);
+          startPolling(job.id);
+        }
       } catch (err) {
-        errorCount += batch.length;
+        console.error("Failed to check active job:", err);
       }
-      setOrganizeProgress({ current: Math.min(i + BATCH_SIZE, ids.length), total: ids.length });
+    };
+    checkActiveJob();
+    
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, []);
+
+  // Start polling for job status
+  const startPolling = (jobId: string) => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
     }
     
-    queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/organize/preview"] });
-    queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-    setSelectedItems(new Set());
-    setIsOrganizing(false);
+    pollingRef.current = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/organize-jobs/${jobId}`);
+        
+        // Handle 404 - job no longer exists
+        if (response.status === 404) {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setIsOrganizing(false);
+          setOrganizeJob(null);
+          queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/organize/preview"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+          return;
+        }
+        
+        const job = await response.json();
+        setOrganizeJob(job);
+        
+        if (job.status === "completed" || job.status === "failed") {
+          if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+          }
+          setIsOrganizing(false);
+          
+          queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/organize/preview"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/tv-series"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/movies"] });
+          setSelectedItems(new Set());
+          
+          if (job.status === "completed") {
+            toast({
+              title: "Organization Complete",
+              description: `${job.successCount} files organized, ${job.failedCount} failed.`,
+            });
+          } else {
+            toast({
+              title: "Organization Failed",
+              description: job.error || "Unknown error",
+              variant: "destructive",
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+        // On error, stop polling to prevent infinite loops
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
+        setIsOrganizing(false);
+      }
+    }, 1000);
+  };
+
+  // Start background organization
+  const startOrganization = async (ids: string[]) => {
+    setIsOrganizing(true);
     
-    if (errorCount > 0) {
+    try {
+      const response = await apiRequest("POST", "/api/organize-jobs", { ids });
+      const data = await response.json();
+      
+      if (data.jobId) {
+        setOrganizeJob({
+          id: data.jobId,
+          status: "running",
+          totalFiles: data.totalFiles,
+          processedFiles: 0,
+          successCount: 0,
+          failedCount: 0,
+          currentFile: null,
+          error: null,
+        });
+        startPolling(data.jobId);
+      }
+    } catch (err: any) {
+      setIsOrganizing(false);
       toast({
-        title: "Organization Completed with Errors",
-        description: `${successCount} files organized, ${errorCount} failed.`,
+        title: "Failed to Start",
+        description: err.message || "Could not start organization",
         variant: "destructive",
-      });
-    } else {
-      toast({
-        title: "Organization Complete",
-        description: `${successCount} files have been organized.`,
       });
     }
   };
@@ -167,29 +261,6 @@ export default function Organizer() {
     return testResults.find(r => r.id === id);
   };
 
-  const organizeMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      return apiRequest("POST", "/api/organize", { ids });
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/media-items"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/organize/preview"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      setSelectedItems(new Set());
-      toast({
-        title: "Organization Complete",
-        description: `${variables.length} files have been organized.`,
-      });
-    },
-    onError: () => {
-      toast({
-        title: "Organization Failed",
-        description: "There was an error organizing the files.",
-        variant: "destructive",
-      });
-    },
-  });
-
   const handleSelectAll = () => {
     if (preview && selectedItems.size === preview.length) {
       setSelectedItems(new Set());
@@ -217,17 +288,12 @@ export default function Organizer() {
       });
       return;
     }
-    organizeMutation.mutate(Array.from(selectedItems));
+    startOrganization(Array.from(selectedItems));
   };
 
   const handleOrganizeAll = () => {
     if (preview && preview.length > 0) {
-      // Use batching for large numbers
-      if (preview.length > 50) {
-        organizeInBatches(preview.map((item) => item.id));
-      } else {
-        organizeMutation.mutate(preview.map((item) => item.id));
-      }
+      startOrganization(preview.map((item) => item.id));
     }
   };
 
@@ -284,10 +350,10 @@ export default function Organizer() {
           <Button
             variant="outline"
             onClick={handleOrganize}
-            disabled={selectedItems.size === 0 || organizeMutation.isPending}
+            disabled={selectedItems.size === 0 || isOrganizing}
             data-testid="button-organize-selected"
           >
-            {organizeMutation.isPending ? (
+            {isOrganizing ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (
               <Check className="h-4 w-4 mr-2" />
@@ -296,23 +362,60 @@ export default function Organizer() {
           </Button>
           <Button
             onClick={handleOrganizeAll}
-            disabled={!preview || preview.length === 0 || organizeMutation.isPending || isOrganizing}
+            disabled={!preview || preview.length === 0 || isOrganizing}
             data-testid="button-organize-all"
           >
             {isOrganizing ? (
-              <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                {organizeProgress.current}/{organizeProgress.total}
-              </>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (
-              <>
-                <FolderTree className="h-4 w-4 mr-2" />
-                Organize All
-              </>
+              <FolderTree className="h-4 w-4 mr-2" />
             )}
+            Organize All
           </Button>
         </div>
       </div>
+
+      {/* Progress Bar - Shows when organization is running */}
+      {isOrganizing && organizeJob && (
+        <Card data-testid="card-organize-progress">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Organizing Files...
+            </CardTitle>
+            <CardDescription>
+              You can switch tabs - organization will continue in background
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span>Progress: {organizeJob.processedFiles} / {organizeJob.totalFiles}</span>
+                <span>{Math.round((organizeJob.processedFiles / organizeJob.totalFiles) * 100)}%</span>
+              </div>
+              <Progress 
+                value={(organizeJob.processedFiles / organizeJob.totalFiles) * 100} 
+                className="h-3"
+              />
+            </div>
+            <div className="flex gap-4 text-sm">
+              <span className="text-green-600 dark:text-green-400">
+                <CheckCircle2 className="h-4 w-4 inline mr-1" />
+                {organizeJob.successCount} Success
+              </span>
+              <span className="text-red-600 dark:text-red-400">
+                <XCircle className="h-4 w-4 inline mr-1" />
+                {organizeJob.failedCount} Failed
+              </span>
+            </div>
+            {organizeJob.currentFile && (
+              <div className="text-sm text-muted-foreground truncate">
+                Current: {organizeJob.currentFile}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
