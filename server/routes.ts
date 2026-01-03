@@ -909,23 +909,65 @@ export async function registerRoutes(
               if (destExists) {
                 // File already organized - create entry with "organized" status so it shows in library
                 console.log(`[Scan] File at destination - adding as organized`);
-                const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
+                const finalName = tmdbName || detectedName;
+                const finalYear = tmdbYear || parsed.year;
+                
                 await storage.createMediaItem({
                   originalFilename: filename,
                   originalPath: destinationPath, // Use destination path since file is there
                   extension: parsed.extension,
                   detectedType: parsed.detectedType,
-                  detectedName: tmdbName || detectedName,
+                  detectedName: finalName,
                   cleanedName: parsed.cleanedName,
                   tmdbId: tmdbId,
                   tmdbName: tmdbName,
-                  year: tmdbYear || parsed.year,
+                  year: finalYear,
                   season: parsed.season,
                   episode: parsed.episode,
                   status: "organized", // Mark as already organized
                   destinationPath,
                   confidence: confidence,
                 });
+                
+                // Also create TV Series or Movie entry for library display
+                if (parsed.detectedType === "movie" && finalName) {
+                  const existingMovie = await storage.getMovieByName(finalName);
+                  if (!existingMovie) {
+                    await storage.createMovie({
+                      name: finalName,
+                      cleanedName: parsed.cleanedName || finalName,
+                      year: finalYear,
+                      filePath: destinationPath,
+                    });
+                    console.log(`[Scan] Created movie entry: ${finalName}`);
+                  }
+                } else if (parsed.detectedType === "tvshow" && finalName) {
+                  // Extract series folder from destination path
+                  const pathParts = destinationPath?.split("/").filter(Boolean) || [];
+                  const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null;
+                  
+                  let series = await storage.getTvSeriesByName(finalName);
+                  if (!series) {
+                    series = await storage.createTvSeries({
+                      name: finalName,
+                      cleanedName: parsed.cleanedName || finalName,
+                      year: finalYear,
+                      totalSeasons: parsed.season || 1,
+                      totalEpisodes: 1,
+                      folderPath: seriesFolderName,
+                    });
+                    console.log(`[Scan] Created TV series: ${finalName}`);
+                  } else {
+                    // Update episode count
+                    await storage.updateTvSeries(series.id, {
+                      totalSeasons: Math.max(series.totalSeasons || 0, parsed.season || 0),
+                      totalEpisodes: (series.totalEpisodes || 0) + 1,
+                      folderPath: series.folderPath || seriesFolderName,
+                    });
+                    console.log(`[Scan] Updated TV series: ${finalName}, episodes: ${(series.totalEpisodes || 0) + 1}`);
+                  }
+                }
+                
                 newItems++;
                 processedFiles++;
                 continue;
