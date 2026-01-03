@@ -556,14 +556,14 @@ async function cleanupEmptyFolders(
 }
 
 // TMDB lookup cache (in-memory for current session)
-const tmdbCache = new Map<string, { id: number; name: string; year: number | null }>();
+const tmdbCache = new Map<string, { id: number; name: string; year: number | null; posterPath: string | null }>();
 
 // Helper: Search TMDB for canonical name
 async function lookupTmdb(
   name: string,
   type: "movie" | "tvshow",
   year: number | null
-): Promise<{ id: number; name: string; year: number | null } | null> {
+): Promise<{ id: number; name: string; year: number | null; posterPath: string | null } | null> {
   // First, clean the name aggressively for TMDB search
   const cleanedName = cleanForTmdbSearch(name);
   const searchQuery = extractTitleForSearch(cleanedName);
@@ -624,10 +624,11 @@ async function lookupTmdb(
       name: type === "movie" ? result.title : result.name,
       year: type === "movie" 
         ? (result.release_date ? parseInt(result.release_date.substring(0, 4)) : null)
-        : (result.first_air_date ? parseInt(result.first_air_date.substring(0, 4)) : null)
+        : (result.first_air_date ? parseInt(result.first_air_date.substring(0, 4)) : null),
+      posterPath: result.poster_path ? `https://image.tmdb.org/t/p/w342${result.poster_path}` : null
     };
     
-    console.log(`[TMDB] Found: "${tmdbResult.name}" (${tmdbResult.year})`);
+    console.log(`[TMDB] Found: "${tmdbResult.name}" (${tmdbResult.year}) poster: ${tmdbResult.posterPath ? 'yes' : 'no'}`);
     tmdbCache.set(cacheKey, tmdbResult);
     return tmdbResult;
   } catch (err) {
@@ -999,6 +1000,7 @@ export async function registerRoutes(
             let tmdbId: number | null = null;
             let tmdbName: string | null = null;
             let tmdbYear: number | null = null;
+            let posterPath: string | null = null;
             
             if (parsed.detectedType !== "unknown") {
               const tmdbResult = await lookupTmdb(
@@ -1010,6 +1012,7 @@ export async function registerRoutes(
                 tmdbId = tmdbResult.id;
                 tmdbName = tmdbResult.name;
                 tmdbYear = tmdbResult.year;
+                posterPath = tmdbResult.posterPath;
                 confidence = Math.min(confidence + 10, 100); // Boost for TMDB match
               }
             }
@@ -1048,6 +1051,7 @@ export async function registerRoutes(
                     cleanedName: parsed.cleanedName,
                     tmdbId: tmdbId,
                     tmdbName: tmdbName,
+                    posterPath: posterPath,
                     year: finalYear,
                     season: parsed.season,
                     episode: parsed.episode,
@@ -1065,6 +1069,8 @@ export async function registerRoutes(
                         cleanedName: parsed.cleanedName || finalName,
                         year: finalYear,
                         filePath: destinationPath,
+                        tmdbId: tmdbId,
+                        posterPath: posterPath,
                       });
                       console.log(`[Scan] Created movie entry: ${finalName}`);
                     }
@@ -1081,6 +1087,8 @@ export async function registerRoutes(
                         totalSeasons: parsed.season || 1,
                         totalEpisodes: 1,
                         folderPath: seriesFolderName,
+                        tmdbId: tmdbId,
+                        posterPath: posterPath,
                       });
                       console.log(`[Scan] Created TV series: ${finalName}`);
                     } else {
@@ -1110,6 +1118,7 @@ export async function registerRoutes(
                     cleanedName: parsed.cleanedName,
                     tmdbId: tmdbId,
                     tmdbName: tmdbName,
+                    posterPath: posterPath,
                     year: tmdbYear || parsed.year,
                     season: parsed.season,
                     episode: parsed.episode,
@@ -1133,6 +1142,7 @@ export async function registerRoutes(
               cleanedName: parsed.cleanedName,
               tmdbId: tmdbId,
               tmdbName: tmdbName,
+              posterPath: posterPath,
               year: tmdbYear || parsed.year,
               season: parsed.season,
               episode: parsed.episode,
@@ -1439,7 +1449,7 @@ export async function registerRoutes(
           originalPath: item.destinationPath // Update path to new location
         });
 
-        // Create movie or TV series entry
+        // Create or update movie or TV series entry
         if (item.detectedType === "movie" && item.detectedName) {
           const existingMovie = await storage.getMovieByName(item.detectedName);
           if (!existingMovie) {
@@ -1448,6 +1458,14 @@ export async function registerRoutes(
               cleanedName: item.cleanedName || item.detectedName,
               year: item.year,
               filePath: item.destinationPath,
+              tmdbId: item.tmdbId,
+              posterPath: item.posterPath,
+            });
+          } else if (item.posterPath && !existingMovie.posterPath) {
+            // Update existing movie with poster if it doesn't have one
+            await storage.updateMovie(existingMovie.id, {
+              posterPath: item.posterPath,
+              tmdbId: item.tmdbId,
             });
           }
         } else if (item.detectedType === "tvshow" && item.detectedName) {
@@ -1464,12 +1482,16 @@ export async function registerRoutes(
               totalSeasons: item.season || 1,
               totalEpisodes: 1,
               folderPath: seriesFolderName,
+              tmdbId: item.tmdbId,
+              posterPath: item.posterPath,
             });
           } else {
             await storage.updateTvSeries(series.id, {
               totalSeasons: Math.max(series.totalSeasons || 0, item.season || 0),
               totalEpisodes: (series.totalEpisodes || 0) + 1,
               folderPath: series.folderPath || seriesFolderName,
+              // Update poster if not already set
+              ...(item.posterPath && !series.posterPath ? { posterPath: item.posterPath, tmdbId: item.tmdbId } : {}),
             });
           }
         }
@@ -1519,6 +1541,206 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Organize error:", error);
       res.status(500).json({ error: "Failed to organize files", details: error.message });
+    }
+  });
+
+  // Background organize job - starts organization and returns job ID for polling
+  app.post("/api/organize-jobs", async (req, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "ids must be a non-empty array" });
+      }
+
+      // Check for active job
+      const activeJob = await storage.getActiveOrganizeJob();
+      if (activeJob) {
+        return res.status(409).json({ error: "Organization already in progress", jobId: activeJob.id });
+      }
+
+      // Check if destination paths are configured
+      const settings = await storage.getAllSettings();
+      const moviesDestination = settings.moviesDestination || "";
+      const tvShowsDestination = settings.tvShowsDestination || "";
+      
+      if (!moviesDestination && !tvShowsDestination) {
+        return res.status(400).json({ 
+          error: "Destination paths not configured. Please set Movies Destination and TV Shows Destination in Settings first." 
+        });
+      }
+
+      // Create job
+      const job = await storage.createOrganizeJob({
+        status: "running",
+        totalFiles: ids.length,
+        processedFiles: 0,
+        successCount: 0,
+        failedCount: 0,
+      });
+
+      // Start background processing
+      const isDocker = fs.existsSync("/host");
+      const CHUNK_SIZE = 10;
+      const CHUNK_DELAY = 200;
+      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+      (async () => {
+        let successCount = 0;
+        let failedCount = 0;
+
+        try {
+          for (let chunkStart = 0; chunkStart < ids.length; chunkStart += CHUNK_SIZE) {
+            const chunk = ids.slice(chunkStart, chunkStart + CHUNK_SIZE);
+            
+            for (const id of chunk) {
+              const item = await storage.getMediaItemById(id);
+              if (!item || !item.originalPath || !item.destinationPath) {
+                failedCount++;
+                await storage.updateOrganizeJob(job.id, { 
+                  processedFiles: chunkStart + chunk.indexOf(id) + 1,
+                  successCount,
+                  failedCount,
+                  currentFile: item?.originalFilename || id
+                });
+                continue;
+              }
+
+              await storage.updateOrganizeJob(job.id, { 
+                currentFile: item.originalFilename 
+              });
+
+              const moveResult = await moveFileToDestination(
+                item.originalPath,
+                item.destinationPath,
+                isDocker
+              );
+
+              if (moveResult.success) {
+                await storage.updateMediaItem(id, { 
+                  status: "organized",
+                  originalPath: item.destinationPath
+                });
+
+                // Create or update movie or TV series entry
+                if (item.detectedType === "movie" && item.detectedName) {
+                  const existingMovie = await storage.getMovieByName(item.detectedName);
+                  if (!existingMovie) {
+                    await storage.createMovie({
+                      name: item.detectedName,
+                      cleanedName: item.cleanedName || item.detectedName,
+                      year: item.year,
+                      filePath: item.destinationPath,
+                      tmdbId: item.tmdbId,
+                      posterPath: item.posterPath,
+                    });
+                  } else if (item.posterPath && !existingMovie.posterPath) {
+                    await storage.updateMovie(existingMovie.id, {
+                      posterPath: item.posterPath,
+                      tmdbId: item.tmdbId,
+                    });
+                  }
+                } else if (item.detectedType === "tvshow" && item.detectedName) {
+                  const pathParts = item.destinationPath?.split("/").filter(Boolean) || [];
+                  const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null;
+                  
+                  let series = await storage.getTvSeriesByName(item.detectedName);
+                  if (!series) {
+                    await storage.createTvSeries({
+                      name: item.detectedName,
+                      cleanedName: item.cleanedName || item.detectedName,
+                      year: item.year,
+                      totalSeasons: item.season || 1,
+                      totalEpisodes: 1,
+                      folderPath: seriesFolderName,
+                      tmdbId: item.tmdbId,
+                      posterPath: item.posterPath,
+                    });
+                  } else {
+                    await storage.updateTvSeries(series.id, {
+                      totalSeasons: Math.max(series.totalSeasons || 0, item.season || 0),
+                      totalEpisodes: (series.totalEpisodes || 0) + 1,
+                      folderPath: series.folderPath || seriesFolderName,
+                      ...(item.posterPath && !series.posterPath ? { posterPath: item.posterPath, tmdbId: item.tmdbId } : {}),
+                    });
+                  }
+                }
+
+                // Cleanup empty source folders
+                const sourcePaths = [
+                  ...(JSON.parse(settings.moviesPaths || "[]") as string[]),
+                  ...(JSON.parse(settings.tvShowsPaths || "[]") as string[])
+                ];
+                await cleanupEmptyFolders(item.originalPath, sourcePaths, isDocker);
+
+                successCount++;
+              } else {
+                failedCount++;
+                await storage.createLog({
+                  mediaItemId: id,
+                  action: "organize",
+                  fromPath: item.originalPath,
+                  toPath: item.destinationPath,
+                  success: false,
+                  message: `Failed: ${moveResult.error}`,
+                });
+              }
+
+              await storage.updateOrganizeJob(job.id, { 
+                processedFiles: chunkStart + chunk.indexOf(id) + 1,
+                successCount,
+                failedCount
+              });
+            }
+
+            if (chunkStart + CHUNK_SIZE < ids.length) {
+              await delay(CHUNK_DELAY);
+            }
+          }
+
+          await storage.updateOrganizeJob(job.id, {
+            status: "completed",
+            completedAt: new Date(),
+            processedFiles: ids.length,
+            successCount,
+            failedCount
+          });
+          console.log(`[OrganizeJob] Completed: ${successCount} success, ${failedCount} failed`);
+        } catch (err: any) {
+          await storage.updateOrganizeJob(job.id, {
+            status: "failed",
+            error: err.message,
+            completedAt: new Date()
+          });
+          console.error("[OrganizeJob] Failed:", err);
+        }
+      })();
+
+      res.json({ jobId: job.id, totalFiles: ids.length });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to start organization", details: error.message });
+    }
+  });
+
+  // Get organize job status
+  app.get("/api/organize-jobs/:id", async (req, res) => {
+    try {
+      const job = await storage.getOrganizeJob(req.params.id);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+      res.json(job);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get job status" });
+    }
+  });
+
+  // Get active organize job
+  app.get("/api/organize-jobs", async (req, res) => {
+    try {
+      const activeJob = await storage.getActiveOrganizeJob();
+      res.json(activeJob || null);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get active job" });
     }
   });
 
