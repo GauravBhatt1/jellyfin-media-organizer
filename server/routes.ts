@@ -843,23 +843,20 @@ export async function registerRoutes(
           
           for (const { filePath, sourcePath } of batch) {
             const filename = path.basename(filePath);
+            const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
             
-            // Check if already exists in database
-            const existing = await storage.getMediaItemByFilename(filename);
-            if (existing) {
-              // If already organized, skip entirely
-              if (existing.status === "organized") {
-                processedFiles++;
-                continue;
-              }
-              // If pending but source file no longer exists, mark as organized
-              const actualSource = isDocker ? `${HOST_PREFIX}${existing.originalPath}` : existing.originalPath;
-              if (!fs.existsSync(actualSource) && existing.destinationPath) {
-                const actualDest = isDocker ? `${HOST_PREFIX}${existing.destinationPath}` : existing.destinationPath;
-                if (fs.existsSync(actualDest)) {
-                  await storage.updateMediaItem(existing.id, { status: "organized", originalPath: existing.destinationPath });
-                }
-              }
+            // Check if already exists in database BY PATH (not just filename)
+            const existingByPath = await storage.getMediaItemByPath(userPath);
+            if (existingByPath) {
+              console.log(`[Scan] File already in DB by path: ${userPath}, status: ${existingByPath.status}`);
+              processedFiles++;
+              continue;
+            }
+            
+            // Also check by destination path in case it was organized
+            const existingByFilename = await storage.getMediaItemByFilename(filename);
+            if (existingByFilename && existingByFilename.originalPath === userPath) {
+              console.log(`[Scan] File already in DB by filename+path: ${filename}`);
               processedFiles++;
               continue;
             }
@@ -973,8 +970,6 @@ export async function registerRoutes(
                 continue;
               }
             }
-
-            const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
 
             await storage.createMediaItem({
               originalFilename: filename,
