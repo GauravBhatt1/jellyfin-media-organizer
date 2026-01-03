@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Film,
@@ -60,31 +60,51 @@ export default function Movies() {
     m.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const MovieCard = ({ movie }: { movie: Movie }) => (
-    <Card className="overflow-hidden group" data-testid={`movie-card-${movie.id}`}>
-      <div className="aspect-[2/3] bg-muted flex items-center justify-center relative">
-        <Film className="h-12 w-12 text-muted-foreground/30" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => deleteMutation.mutate(movie.id)}
-            disabled={deleteMutation.isPending}
-            data-testid={`button-delete-movie-${movie.id}`}
-          >
-            <Trash2 className="h-3 w-3 mr-1" />
-            Delete
-          </Button>
+  const [failedPosters, setFailedPosters] = useState<Set<string>>(new Set());
+
+  const handlePosterError = useCallback((movieId: string) => {
+    setFailedPosters(prev => new Set(prev).add(movieId));
+  }, []);
+
+  const MovieCard = ({ movie }: { movie: Movie }) => {
+    const showPoster = movie.posterPath && !failedPosters.has(movie.id);
+    
+    return (
+      <Card className="overflow-hidden group" data-testid={`movie-card-${movie.id}`}>
+        <div className="aspect-[2/3] bg-muted flex items-center justify-center relative overflow-hidden">
+          {showPoster ? (
+            <img 
+              src={movie.posterPath!} 
+              alt={movie.name}
+              className="w-full h-full object-cover"
+              loading="lazy"
+              onError={() => handlePosterError(movie.id)}
+            />
+          ) : (
+            <Film className="h-12 w-12 text-muted-foreground/30" />
+          )}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => deleteMutation.mutate(movie.id)}
+              disabled={deleteMutation.isPending}
+              data-testid={`button-delete-movie-${movie.id}`}
+            >
+              <Trash2 className="h-3 w-3 mr-1" />
+              Delete
+            </Button>
+          </div>
         </div>
-      </div>
-      <CardContent className="p-3">
-        <p className="font-medium text-sm truncate">{movie.name}</p>
-        {movie.year && (
-          <p className="text-xs text-muted-foreground mt-1">{movie.year}</p>
-        )}
-      </CardContent>
-    </Card>
-  );
+        <CardContent className="p-3">
+          <p className="font-medium text-sm truncate">{movie.name}</p>
+          {movie.year && (
+            <p className="text-xs text-muted-foreground mt-1">{movie.year}</p>
+          )}
+        </CardContent>
+      </Card>
+    );
+  };
 
   return (
     <div className="space-y-6">
