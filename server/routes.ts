@@ -629,6 +629,48 @@ export async function registerRoutes(
     }
   });
 
+  // Refresh status - check all pending items and auto-update if already organized
+  app.post("/api/media-items/refresh-status", async (req, res) => {
+    try {
+      const isDocker = fs.existsSync("/host");
+      const HOST_PREFIX = "/host";
+      
+      const pendingItems = await storage.getPendingMediaItems();
+      let updated = 0;
+      let removed = 0;
+      
+      for (const item of pendingItems) {
+        if (!item.originalPath || !item.destinationPath) continue;
+        
+        const actualSource = isDocker ? `${HOST_PREFIX}${item.originalPath}` : item.originalPath;
+        const actualDest = isDocker ? `${HOST_PREFIX}${item.destinationPath}` : item.destinationPath;
+        
+        // If source doesn't exist but destination does, mark as organized
+        if (!fs.existsSync(actualSource) && fs.existsSync(actualDest)) {
+          await storage.updateMediaItem(item.id, { 
+            status: "organized", 
+            originalPath: item.destinationPath 
+          });
+          updated++;
+        }
+        // If neither source nor destination exist, remove from database
+        else if (!fs.existsSync(actualSource) && !fs.existsSync(actualDest)) {
+          await storage.deleteMediaItem(item.id);
+          removed++;
+        }
+      }
+      
+      res.json({ 
+        message: `Refreshed status: ${updated} items marked as organized, ${removed} orphan entries removed`,
+        updated,
+        removed
+      });
+    } catch (error) {
+      console.error("Refresh status error:", error);
+      res.status(500).json({ error: "Failed to refresh status" });
+    }
+  });
+
   app.delete("/api/media-items/:id", async (req, res) => {
     try {
       const success = await storage.deleteMediaItem(req.params.id);
@@ -802,9 +844,22 @@ export async function registerRoutes(
           for (const { filePath, sourcePath } of batch) {
             const filename = path.basename(filePath);
             
-            // Check if already exists
+            // Check if already exists in database
             const existing = await storage.getMediaItemByFilename(filename);
             if (existing) {
+              // If already organized, skip entirely
+              if (existing.status === "organized") {
+                processedFiles++;
+                continue;
+              }
+              // If pending but source file no longer exists, mark as organized
+              const actualSource = isDocker ? `${HOST_PREFIX}${existing.originalPath}` : existing.originalPath;
+              if (!fs.existsSync(actualSource) && existing.destinationPath) {
+                const actualDest = isDocker ? `${HOST_PREFIX}${existing.destinationPath}` : existing.destinationPath;
+                if (fs.existsSync(actualDest)) {
+                  await storage.updateMediaItem(existing.id, { status: "organized", originalPath: existing.destinationPath });
+                }
+              }
               processedFiles++;
               continue;
             }
