@@ -901,6 +901,16 @@ export async function registerRoutes(
               tmdbYear
             );
 
+            // SKIP if file already exists at destination - no database entry needed
+            if (destinationPath) {
+              const actualDestPath = isDocker ? `${HOST_PREFIX}${destinationPath}` : destinationPath;
+              if (fs.existsSync(actualDestPath)) {
+                // File already organized at destination, skip entirely
+                processedFiles++;
+                continue;
+              }
+            }
+
             const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
 
             await storage.createMediaItem({
