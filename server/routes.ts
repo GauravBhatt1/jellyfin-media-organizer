@@ -901,14 +901,32 @@ export async function registerRoutes(
               tmdbYear
             );
 
-            // SKIP if file already exists at destination - no database entry needed
+            // Check if file already exists at destination
             if (destinationPath) {
               const actualDestPath = isDocker ? `${HOST_PREFIX}${destinationPath}` : destinationPath;
               const destExists = fs.existsSync(actualDestPath);
               console.log(`[Scan] File: ${filename}, Dest: ${actualDestPath}, Exists: ${destExists}`);
               if (destExists) {
-                // File already organized at destination, skip entirely
-                console.log(`[Scan] SKIPPING - file already at destination`);
+                // File already organized - create entry with "organized" status so it shows in library
+                console.log(`[Scan] File at destination - adding as organized`);
+                const userPath = isDocker ? filePath.replace(HOST_PREFIX, '') : filePath;
+                await storage.createMediaItem({
+                  originalFilename: filename,
+                  originalPath: destinationPath, // Use destination path since file is there
+                  extension: parsed.extension,
+                  detectedType: parsed.detectedType,
+                  detectedName: tmdbName || detectedName,
+                  cleanedName: parsed.cleanedName,
+                  tmdbId: tmdbId,
+                  tmdbName: tmdbName,
+                  year: tmdbYear || parsed.year,
+                  season: parsed.season,
+                  episode: parsed.episode,
+                  status: "organized", // Mark as already organized
+                  destinationPath,
+                  confidence: confidence,
+                });
+                newItems++;
                 processedFiles++;
                 continue;
               }
