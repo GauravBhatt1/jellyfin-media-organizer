@@ -38,16 +38,17 @@ export function FolderPicker({
   title = "Select Folder",
   initialPath = "/",
 }: FolderPickerProps) {
-  const [currentPath, setCurrentPath] = useState(initialPath);
+  // Always start at root "/" when dialog opens
+  const [currentPath, setCurrentPath] = useState("/");
 
-  // Reset to initialPath when dialog opens or initialPath changes
+  // Force reset to root every time dialog opens
   useEffect(() => {
     if (open) {
-      setCurrentPath(initialPath || "/");
+      setCurrentPath("/");
     }
-  }, [open, initialPath]);
+  }, [open]);
 
-  const { data, isLoading } = useQuery<FolderResponse>({
+  const { data, isLoading, refetch } = useQuery<FolderResponse>({
     queryKey: ["/api/folders", currentPath],
     queryFn: async () => {
       const res = await fetch(`/api/folders?path=${encodeURIComponent(currentPath)}`);
@@ -55,7 +56,15 @@ export function FolderPicker({
       return res.json();
     },
     enabled: open,
+    staleTime: 0, // Always refetch
   });
+
+  // Refetch when dialog opens
+  useEffect(() => {
+    if (open) {
+      refetch();
+    }
+  }, [open, refetch]);
 
   const handleSelect = () => {
     onSelect(currentPath);
