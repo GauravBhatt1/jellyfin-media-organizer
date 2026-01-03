@@ -13,6 +13,8 @@ import {
   type InsertSettings,
   type ScanJob,
   type InsertScanJob,
+  type OrganizeJob,
+  type InsertOrganizeJob,
   RELEASE_GROUPS,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
@@ -82,6 +84,12 @@ export interface IStorage {
   getScanJob(id: string): Promise<ScanJob | undefined>;
   getActiveScanJob(): Promise<ScanJob | undefined>;
   updateScanJob(id: string, updates: Partial<ScanJob>): Promise<ScanJob | undefined>;
+
+  // Organize Jobs
+  createOrganizeJob(job: InsertOrganizeJob): Promise<OrganizeJob>;
+  getOrganizeJob(id: string): Promise<OrganizeJob | undefined>;
+  getActiveOrganizeJob(): Promise<OrganizeJob | undefined>;
+  updateOrganizeJob(id: string, updates: Partial<OrganizeJob>): Promise<OrganizeJob | undefined>;
 }
 
 // Helper: clean filename for comparison
@@ -162,6 +170,7 @@ export class MemStorage implements IStorage {
   private logs: Map<string, OrganizationLog>;
   private settings: Map<string, string>;
   private scanJobs: Map<string, ScanJob>;
+  private organizeJobs: Map<string, OrganizeJob>;
 
   constructor() {
     this.users = new Map();
@@ -171,6 +180,7 @@ export class MemStorage implements IStorage {
     this.logs = new Map();
     this.settings = new Map();
     this.scanJobs = new Map();
+    this.organizeJobs = new Map();
 
     // Set default settings
     this.settings.set("sourcePath", "/Inbox");
@@ -505,6 +515,37 @@ export class MemStorage implements IStorage {
     if (!job) return undefined;
     const updated = { ...job, ...updates };
     this.scanJobs.set(id, updated);
+    return updated;
+  }
+
+  // Organize Jobs
+  async createOrganizeJob(job: InsertOrganizeJob): Promise<OrganizeJob> {
+    const id = randomUUID();
+    const organizeJob: OrganizeJob = {
+      ...job,
+      id,
+      startedAt: new Date(),
+      completedAt: null,
+    };
+    this.organizeJobs.set(id, organizeJob);
+    return organizeJob;
+  }
+
+  async getOrganizeJob(id: string): Promise<OrganizeJob | undefined> {
+    return this.organizeJobs.get(id);
+  }
+
+  async getActiveOrganizeJob(): Promise<OrganizeJob | undefined> {
+    return Array.from(this.organizeJobs.values()).find(
+      (job) => job.status === "pending" || job.status === "running"
+    );
+  }
+
+  async updateOrganizeJob(id: string, updates: Partial<OrganizeJob>): Promise<OrganizeJob | undefined> {
+    const job = this.organizeJobs.get(id);
+    if (!job) return undefined;
+    const updated = { ...job, ...updates };
+    this.organizeJobs.set(id, updated);
     return updated;
   }
 }
