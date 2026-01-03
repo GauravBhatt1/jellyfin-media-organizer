@@ -31,6 +31,106 @@ function cleanFilename(filename: string): string {
   return cleaned;
 }
 
+// Aggressive cleaner for TMDB search - strips ALL junk to get just the title
+function cleanForTmdbSearch(filename: string): string {
+  let cleaned = filename;
+  
+  // Remove extension
+  cleaned = cleaned.replace(/\.[a-zA-Z0-9]{2,4}$/, "");
+  
+  // Replace delimiters with spaces
+  cleaned = cleaned.replace(/[._\-\[\]]/g, " ");
+  
+  // Remove content in brackets except years
+  cleaned = cleaned.replace(/\((?!(?:19|20)\d{2}\))[^)]*\)/g, " ");
+  
+  // Comprehensive list of junk patterns to remove (case-insensitive)
+  const junkPatterns = [
+    // Quality tags
+    /\b(720p|1080p|2160p|4k|hd|fhd|uhd|sd)\b/gi,
+    /\b(hdtv|webdl|web-dl|webrip|web|bluray|bdrip|brrip|dvdrip|hdrip|hdtc|hdts|hdcam|cam|ts|tc|r5|dvdscr|screener|pre)\b/gi,
+    /\b(remux|proper|repack|internal|real|extended|uncut|unrated|theatrical|directors?\.?cut)\b/gi,
+    
+    // Video codecs
+    /\b(x264|x265|h\.?264|h\.?265|hevc|avc|xvid|divx|10bit|8bit|hdr|hdr10|sdr|dv|dolby\.?vision)\b/gi,
+    
+    // Audio codecs and channels
+    /\b(aac|ac3|dts|dts-hd|truehd|atmos|flac|mp3|eac3)\b/gi,
+    /\b(ddp?5?\.?1|dd5?\.?1|dd2?\.?0|5\.1|7\.1|2\.0|dts-x)\b/gi,
+    /\b(ddp|ddpa|dts|dd)\d*\.?\d*\b/gi,
+    
+    // Streaming services
+    /\b(amzn|amazon|nf|netflix|hmax|hbo|dsnp|disney\+?|atvp|apple|pcok|peacock|hulu|max|hotstar|hs|jhs|zee5|sonyliv|jio|voot|mxplayer)\b/gi,
+    
+    // Languages (remove these from search query, not the whole filename)
+    /\b(hindi|english|tamil|telugu|malayalam|kannada|bengali|marathi|punjabi|gujarati|spanish|french|german|italian|japanese|korean|chinese|russian|portuguese|arabic|thai|vietnamese|indonesian|dutch|polish|turkish|swedish|norwegian|danish|finnish|greek|hebrew|hungarian|czech|romanian|ukrainian|persian|urdu)\b/gi,
+    /\b(hin|eng|tam|tel|mal|kan|ben|mar|pun|chi|kor|jap|spa|fre|ger|ita|rus|por|ara|tha|vie|ind|dut|pol|tur|swe|nor|dan|fin|gre|heb|hun|cze|rom|ukr|per|urd)\b/gi,
+    /\b(dual|multi|dual-audio|multi-audio)\b/gi,
+    
+    // Subtitles
+    /\b(esub|esubs|subs?|subtitles?|hcsub|hc|msub|msubs|subtitled)\b/gi,
+    
+    // Release groups and uploaders
+    /\b(yts|yify|rarbg|eztv|ettv|lol|dimension|sparks|ntg|ntb|flux|phoenix|ggez|ggwp|gossip|cmrg|sigma|mkvcage|pahe|psa|tepes|hone|evo|fgt|galactica|memento|syncopy|nogrp|ion10|playwave|frds|npms|successors|telly|cakes|glhf|deejayahmed|hdhub4u|kingdom|katmoviehd|grab|ms|tv|rg)\b/gi,
+    
+    // Quality indicators
+    /\b(hq|lq|line|clear|proper|clean)\b/gi,
+    
+    // Common junk
+    /\b(www|com|org|net|to|in|me|cc|ws|sx)\b/gi,
+    /\b(v2|v3|v4)\b/gi,
+    /\baka\b/gi,
+  ];
+  
+  for (const pattern of junkPatterns) {
+    cleaned = cleaned.replace(pattern, " ");
+  }
+  
+  // Remove standalone numbers that look like audio channels or quality
+  cleaned = cleaned.replace(/\b\d+\s*\d*\s*\b/g, (match) => {
+    // Keep years, remove everything else
+    if (/^(19|20)\d{2}$/.test(match.trim())) return match;
+    return " ";
+  });
+  
+  // Clean up multiple spaces and trim
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  
+  // Remove leading/trailing punctuation
+  cleaned = cleaned.replace(/^[\s\-\.,]+|[\s\-\.,]+$/g, "");
+  
+  // Remove empty parentheses or malformed ones
+  cleaned = cleaned.replace(/\(\s*\)/g, "");
+  cleaned = cleaned.replace(/\(\s*\(/g, "(");
+  cleaned = cleaned.replace(/\)\s*\)/g, ")");
+  
+  return cleaned;
+}
+
+// Extract just the title words (first few meaningful words before junk)
+function extractTitleForSearch(cleanedName: string): string {
+  // Split into words
+  const words = cleanedName.split(/\s+/);
+  
+  // Take words until we hit a year or max 6 words
+  const titleWords: string[] = [];
+  for (const word of words) {
+    // Stop at year
+    if (/^\(?(19|20)\d{2}\)?$/.test(word)) break;
+    // Stop at empty or very short words that might be junk
+    if (word.length < 2) continue;
+    // Skip numbers unless they look like part of title (like "2" in "Iron Man 2")
+    if (/^\d+$/.test(word) && titleWords.length === 0) continue;
+    
+    titleWords.push(word);
+    
+    // Max 6 words for title
+    if (titleWords.length >= 6) break;
+  }
+  
+  return titleWords.join(" ").trim();
+}
+
 function extractYear(filename: string): number | null {
   const parenMatch = filename.match(/\(?(19[5-9]\d|20[0-2]\d)\)?/);
   if (parenMatch) {
@@ -464,7 +564,18 @@ async function lookupTmdb(
   type: "movie" | "tvshow",
   year: number | null
 ): Promise<{ id: number; name: string; year: number | null } | null> {
-  const cacheKey = `${type}:${name.toLowerCase()}:${year || ""}`;
+  // First, clean the name aggressively for TMDB search
+  const cleanedName = cleanForTmdbSearch(name);
+  const searchQuery = extractTitleForSearch(cleanedName);
+  
+  console.log(`[TMDB] Original: "${name}" -> Cleaned: "${cleanedName}" -> Search: "${searchQuery}"`);
+  
+  if (!searchQuery || searchQuery.length < 2) {
+    console.log(`[TMDB] Search query too short, skipping`);
+    return null;
+  }
+  
+  const cacheKey = `${type}:${searchQuery.toLowerCase()}:${year || ""}`;
   
   if (tmdbCache.has(cacheKey)) {
     return tmdbCache.get(cacheKey)!;
@@ -484,16 +595,28 @@ async function lookupTmdb(
   
   try {
     const endpoint = type === "movie" ? "movie" : "tv";
-    let url = `${TMDB_BASE_URL}/search/${endpoint}?api_key=${apiKey}&query=${encodeURIComponent(name)}`;
+    
+    // Try with year first
+    let url = `${TMDB_BASE_URL}/search/${endpoint}?api_key=${apiKey}&query=${encodeURIComponent(searchQuery)}`;
     if (year) {
       url += type === "movie" ? `&year=${year}` : `&first_air_date_year=${year}`;
     }
     
-    const response = await fetch(url);
-    if (!response.ok) return null;
+    let response = await fetch(url);
+    let data = response.ok ? await response.json() : null;
     
-    const data = await response.json();
-    if (!data.results || data.results.length === 0) return null;
+    // If no results with year, try without year
+    if ((!data?.results || data.results.length === 0) && year) {
+      console.log(`[TMDB] No results with year ${year}, trying without year`);
+      url = `${TMDB_BASE_URL}/search/${endpoint}?api_key=${apiKey}&query=${encodeURIComponent(searchQuery)}`;
+      response = await fetch(url);
+      data = response.ok ? await response.json() : null;
+    }
+    
+    if (!data?.results || data.results.length === 0) {
+      console.log(`[TMDB] No results for "${searchQuery}"`);
+      return null;
+    }
     
     const result = data.results[0];
     const tmdbResult = {
@@ -504,10 +627,11 @@ async function lookupTmdb(
         : (result.first_air_date ? parseInt(result.first_air_date.substring(0, 4)) : null)
     };
     
+    console.log(`[TMDB] Found: "${tmdbResult.name}" (${tmdbResult.year})`);
     tmdbCache.set(cacheKey, tmdbResult);
     return tmdbResult;
   } catch (err) {
-    console.error("TMDB lookup error:", err);
+    console.error("[TMDB] Lookup error:", err);
     return null;
   }
 }
@@ -1210,6 +1334,7 @@ export async function registerRoutes(
 
   // Organize endpoint - actually moves files to destination
   // dryRun=true will only verify paths without moving
+  // Uses chunked processing to avoid system crashes with large batches
   app.post("/api/organize", async (req, res) => {
     try {
       const { ids, dryRun = false } = req.body;
@@ -1232,10 +1357,23 @@ export async function registerRoutes(
       const isDocker = fs.existsSync("/host");
       const HOST_PREFIX = "/host";
       
-      const organized = [];
-      const failed = [];
+      const organized: any[] = [];
+      const failed: any[] = [];
+      
+      // Chunked processing to prevent system overload
+      const CHUNK_SIZE = 10; // Process 10 files at a time
+      const CHUNK_DELAY = 200; // 200ms delay between chunks
+      
+      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+      
+      console.log(`[Organize] Starting organization of ${ids.length} files in chunks of ${CHUNK_SIZE}`);
 
-      for (const id of ids) {
+      for (let chunkStart = 0; chunkStart < ids.length; chunkStart += CHUNK_SIZE) {
+        const chunk = ids.slice(chunkStart, chunkStart + CHUNK_SIZE);
+        console.log(`[Organize] Processing chunk ${Math.floor(chunkStart / CHUNK_SIZE) + 1}/${Math.ceil(ids.length / CHUNK_SIZE)}`);
+        
+        // Process files in chunk sequentially to avoid concurrent file operations
+        for (const id of chunk) {
         const item = await storage.getMediaItemById(id);
         if (!item) continue;
         if (!item.originalPath || !item.destinationPath) {
@@ -1362,7 +1500,15 @@ export async function registerRoutes(
         });
 
         organized.push(id);
-      }
+        } // end of inner for loop (files in chunk)
+        
+        // Add delay between chunks to prevent system overload
+        if (chunkStart + CHUNK_SIZE < ids.length) {
+          await delay(CHUNK_DELAY);
+        }
+      } // end of outer for loop (chunks)
+      
+      console.log(`[Organize] Completed: ${organized.length} organized, ${failed.length} failed`);
 
       res.json({ 
         organized: dryRun ? organized : organized.length, 
