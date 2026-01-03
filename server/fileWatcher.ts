@@ -174,7 +174,64 @@ async function generateDestinationPath(
   return `${basePaths.movies}/Unsorted/${parsed.cleanedName}${extension}`;
 }
 
-async function processNewFile(filePath: string, moviesPath: string, tvShowsPath: string) {
+// Auto-organize: move file to destination
+async function autoOrganizeFile(
+  filePath: string, 
+  destinationPath: string, 
+  isDocker: boolean
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const actualSourcePath = isDocker ? HOST_PREFIX + filePath : filePath;
+    const actualDestPath = isDocker ? HOST_PREFIX + destinationPath : destinationPath;
+    
+    // Check source exists
+    if (!fs.existsSync(actualSourcePath)) {
+      return { success: false, error: "Source file not found" };
+    }
+    
+    // Create destination directory
+    const destDir = path.dirname(actualDestPath);
+    fs.mkdirSync(destDir, { recursive: true });
+    
+    // Get source file stats
+    const sourceStats = fs.statSync(actualSourcePath);
+    
+    // Copy file
+    fs.copyFileSync(actualSourcePath, actualDestPath);
+    
+    // Verify copy
+    const destStats = fs.statSync(actualDestPath);
+    if (destStats.size !== sourceStats.size) {
+      fs.unlinkSync(actualDestPath);
+      return { success: false, error: "Size mismatch after copy" };
+    }
+    
+    // Delete source
+    fs.unlinkSync(actualSourcePath);
+    
+    // Clean up empty parent directories
+    let parentDir = path.dirname(actualSourcePath);
+    for (let i = 0; i < 5; i++) {
+      try {
+        const contents = fs.readdirSync(parentDir);
+        if (contents.length === 0) {
+          fs.rmdirSync(parentDir);
+          parentDir = path.dirname(parentDir);
+        } else {
+          break;
+        }
+      } catch {
+        break;
+      }
+    }
+    
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+}
+
+async function processNewFile(filePath: string, moviesPath: string, tvShowsPath: string, autoOrganize: boolean) {
   const filename = path.basename(filePath);
   const ext = path.extname(filename).toLowerCase();
   
@@ -202,31 +259,89 @@ async function processNewFile(filePath: string, moviesPath: string, tvShowsPath:
       ? filePath.slice(HOST_PREFIX.length) 
       : filePath;
 
-    await storage.createMediaItem({
-      originalFilename: filename,
-      originalPath: userPath,
-      extension: parsed.extension,
-      detectedType: parsed.detectedType,
-      detectedName: parsed.detectedName,
-      cleanedName: parsed.cleanedName,
-      year: parsed.year,
-      season: parsed.season,
-      episode: parsed.episode,
-      status: "pending",
-      destinationPath,
-      confidence: parsed.confidence,
-    });
+    // If auto-organize enabled and destination paths are set, organize immediately
+    if (autoOrganize && moviesPath && tvShowsPath && destinationPath) {
+      const result = await autoOrganizeFile(userPath, destinationPath, isDocker);
+      
+      if (result.success) {
+        await storage.createMediaItem({
+          originalFilename: filename,
+          originalPath: userPath,
+          extension: parsed.extension,
+          detectedType: parsed.detectedType,
+          detectedName: parsed.detectedName,
+          cleanedName: parsed.cleanedName,
+          year: parsed.year,
+          season: parsed.season,
+          episode: parsed.episode,
+          status: "organized",
+          destinationPath,
+          confidence: parsed.confidence,
+        });
+
+        await storage.createLog({
+          action: "auto-organize",
+          fromPath: userPath,
+          toPath: destinationPath,
+          success: true,
+          message: `Auto-organized: ${filename}`,
+        });
+
+        console.log(`[FileWatcher] Auto-organized: ${filename} -> ${destinationPath}`);
+      } else {
+        // Failed to organize, save as pending
+        await storage.createMediaItem({
+          originalFilename: filename,
+          originalPath: userPath,
+          extension: parsed.extension,
+          detectedType: parsed.detectedType,
+          detectedName: parsed.detectedName,
+          cleanedName: parsed.cleanedName,
+          year: parsed.year,
+          season: parsed.season,
+          episode: parsed.episode,
+          status: "pending",
+          destinationPath,
+          confidence: parsed.confidence,
+        });
+
+        await storage.createLog({
+          action: "auto-organize",
+          fromPath: userPath,
+          success: false,
+          message: `Auto-organize failed: ${result.error}`,
+        });
+
+        console.error(`[FileWatcher] Auto-organize failed: ${filename} - ${result.error}`);
+      }
+    } else {
+      // No auto-organize, just save as pending
+      await storage.createMediaItem({
+        originalFilename: filename,
+        originalPath: userPath,
+        extension: parsed.extension,
+        detectedType: parsed.detectedType,
+        detectedName: parsed.detectedName,
+        cleanedName: parsed.cleanedName,
+        year: parsed.year,
+        season: parsed.season,
+        episode: parsed.episode,
+        status: "pending",
+        destinationPath,
+        confidence: parsed.confidence,
+      });
+
+      await storage.createLog({
+        action: "auto-detect",
+        fromPath: userPath,
+        success: true,
+        message: `Auto-detected: ${filename}`,
+      });
+
+      console.log(`[FileWatcher] New file detected: ${filename}`);
+    }
 
     state.filesProcessed++;
-
-    await storage.createLog({
-      action: "auto-detect",
-      fromPath: userPath,
-      success: true,
-      message: `Auto-detected: ${filename}`,
-    });
-
-    console.log(`[FileWatcher] New file detected and processed: ${filename}`);
   } catch (error) {
     const errorMsg = `Error processing ${filename}: ${error}`;
     state.errors.push(errorMsg);
@@ -272,8 +387,12 @@ export async function startWatcher(): Promise<{ success: boolean; message: strin
     return { success: false, message: "No accessible folders found" };
   }
 
-  const defaultMoviesPath = moviesPaths[0] || "/Movies";
-  const defaultTvShowsPath = tvShowsPaths[0] || "/TV Shows";
+  // Use DESTINATION paths for organizing (not source paths!)
+  const moviesDestination = settings.moviesDestination || "";
+  const tvShowsDestination = settings.tvShowsDestination || "";
+  
+  // Check if auto-organize is enabled
+  const autoOrganize = settings.autoOrganize === "true" && !!moviesDestination && !!tvShowsDestination;
 
   state.watcher = chokidar.watch(watchPaths, {
     ignored: /(^|[\/\\])\../, // ignore dotfiles
@@ -288,7 +407,7 @@ export async function startWatcher(): Promise<{ success: boolean; message: strin
 
   state.watcher
     .on("add", (filePath) => {
-      processNewFile(filePath, defaultMoviesPath, defaultTvShowsPath);
+      processNewFile(filePath, moviesDestination, tvShowsDestination, autoOrganize);
     })
     .on("error", (error) => {
       const errorMsg = `Watcher error: ${error}`;
