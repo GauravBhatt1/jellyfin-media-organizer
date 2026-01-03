@@ -904,70 +904,99 @@ export async function registerRoutes(
               const destExists = fs.existsSync(actualDestPath);
               console.log(`[Scan] File: ${filename}, Dest: ${actualDestPath}, Exists: ${destExists}`);
               if (destExists) {
-                // File already organized - create entry with "organized" status so it shows in library
-                console.log(`[Scan] File at destination - adding as organized`);
-                const finalName = tmdbName || detectedName;
-                const finalYear = tmdbYear || parsed.year;
+                // Check if source path equals destination path (truly organized)
+                // Or if source is different (duplicate/unorganized copy)
+                const normalizedSource = userPath.replace(/\/+/g, '/');
+                const normalizedDest = destinationPath.replace(/\/+/g, '/');
                 
-                await storage.createMediaItem({
-                  originalFilename: filename,
-                  originalPath: destinationPath, // Use destination path since file is there
-                  extension: parsed.extension,
-                  detectedType: parsed.detectedType,
-                  detectedName: finalName,
-                  cleanedName: parsed.cleanedName,
-                  tmdbId: tmdbId,
-                  tmdbName: tmdbName,
-                  year: finalYear,
-                  season: parsed.season,
-                  episode: parsed.episode,
-                  status: "organized", // Mark as already organized
-                  destinationPath,
-                  confidence: confidence,
-                });
+                if (normalizedSource === normalizedDest) {
+                  // File IS at its correct destination - truly organized
+                  console.log(`[Scan] File at correct destination - adding as organized: ${filename}`);
+                  const finalName = tmdbName || detectedName;
+                  const finalYear = tmdbYear || parsed.year;
                 
-                // Also create TV Series or Movie entry for library display
-                if (parsed.detectedType === "movie" && finalName) {
-                  const existingMovie = await storage.getMovieByName(finalName);
-                  if (!existingMovie) {
-                    await storage.createMovie({
-                      name: finalName,
-                      cleanedName: parsed.cleanedName || finalName,
-                      year: finalYear,
-                      filePath: destinationPath,
-                    });
-                    console.log(`[Scan] Created movie entry: ${finalName}`);
-                  }
-                } else if (parsed.detectedType === "tvshow" && finalName) {
-                  // Extract series folder from destination path
-                  const pathParts = destinationPath?.split("/").filter(Boolean) || [];
-                  const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null;
+                  await storage.createMediaItem({
+                    originalFilename: filename,
+                    originalPath: destinationPath,
+                    extension: parsed.extension,
+                    detectedType: parsed.detectedType,
+                    detectedName: finalName,
+                    cleanedName: parsed.cleanedName,
+                    tmdbId: tmdbId,
+                    tmdbName: tmdbName,
+                    year: finalYear,
+                    season: parsed.season,
+                    episode: parsed.episode,
+                    status: "organized",
+                    destinationPath,
+                    confidence: confidence,
+                  });
                   
-                  let series = await storage.getTvSeriesByName(finalName);
-                  if (!series) {
-                    series = await storage.createTvSeries({
-                      name: finalName,
-                      cleanedName: parsed.cleanedName || finalName,
-                      year: finalYear,
-                      totalSeasons: parsed.season || 1,
-                      totalEpisodes: 1,
-                      folderPath: seriesFolderName,
-                    });
-                    console.log(`[Scan] Created TV series: ${finalName}`);
-                  } else {
-                    // Update episode count
-                    await storage.updateTvSeries(series.id, {
-                      totalSeasons: Math.max(series.totalSeasons || 0, parsed.season || 0),
-                      totalEpisodes: (series.totalEpisodes || 0) + 1,
-                      folderPath: series.folderPath || seriesFolderName,
-                    });
-                    console.log(`[Scan] Updated TV series: ${finalName}, episodes: ${(series.totalEpisodes || 0) + 1}`);
+                  // Also create TV Series or Movie entry for library display
+                  if (parsed.detectedType === "movie" && finalName) {
+                    const existingMovie = await storage.getMovieByName(finalName);
+                    if (!existingMovie) {
+                      await storage.createMovie({
+                        name: finalName,
+                        cleanedName: parsed.cleanedName || finalName,
+                        year: finalYear,
+                        filePath: destinationPath,
+                      });
+                      console.log(`[Scan] Created movie entry: ${finalName}`);
+                    }
+                  } else if (parsed.detectedType === "tvshow" && finalName) {
+                    const pathParts = destinationPath?.split("/").filter(Boolean) || [];
+                    const seriesFolderName = pathParts.length >= 2 ? pathParts[1] : null;
+                    
+                    let series = await storage.getTvSeriesByName(finalName);
+                    if (!series) {
+                      series = await storage.createTvSeries({
+                        name: finalName,
+                        cleanedName: parsed.cleanedName || finalName,
+                        year: finalYear,
+                        totalSeasons: parsed.season || 1,
+                        totalEpisodes: 1,
+                        folderPath: seriesFolderName,
+                      });
+                      console.log(`[Scan] Created TV series: ${finalName}`);
+                    } else {
+                      await storage.updateTvSeries(series.id, {
+                        totalSeasons: Math.max(series.totalSeasons || 0, parsed.season || 0),
+                        totalEpisodes: (series.totalEpisodes || 0) + 1,
+                        folderPath: series.folderPath || seriesFolderName,
+                      });
+                      console.log(`[Scan] Updated TV series: ${finalName}, episodes: ${(series.totalEpisodes || 0) + 1}`);
+                    }
                   }
+                  
+                  newItems++;
+                  processedFiles++;
+                  continue;
+                } else {
+                  // Source path is DIFFERENT from destination - this is an UNORGANIZED duplicate!
+                  // File exists at destination but this source copy is somewhere else
+                  console.log(`[Scan] DUPLICATE found - source: ${userPath}, dest exists at: ${destinationPath}`);
+                  // Add as "duplicate" so user can see it and decide what to do
+                  await storage.createMediaItem({
+                    originalFilename: filename,
+                    originalPath: userPath,
+                    extension: parsed.extension,
+                    detectedType: parsed.detectedType,
+                    detectedName: tmdbName || detectedName,
+                    cleanedName: parsed.cleanedName,
+                    tmdbId: tmdbId,
+                    tmdbName: tmdbName,
+                    year: tmdbYear || parsed.year,
+                    season: parsed.season,
+                    episode: parsed.episode,
+                    status: "duplicate",
+                    destinationPath,
+                    confidence: confidence,
+                  });
+                  newItems++;
+                  processedFiles++;
+                  continue;
                 }
-                
-                newItems++;
-                processedFiles++;
-                continue;
               }
             }
 
