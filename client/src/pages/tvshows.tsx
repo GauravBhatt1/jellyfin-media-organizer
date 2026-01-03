@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   Tv,
@@ -44,6 +44,11 @@ export default function TvShows() {
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedSeries, setExpandedSeries] = useState<Set<string>>(new Set());
   const [expandedSeasons, setExpandedSeasons] = useState<Set<string>>(new Set());
+  const [failedPosters, setFailedPosters] = useState<Set<string>>(new Set());
+
+  const handlePosterError = useCallback((seriesId: string) => {
+    setFailedPosters(prev => new Set(prev).add(seriesId));
+  }, []);
 
   const { data: series, isLoading, refetch, isRefetching } = useQuery<SeriesWithEpisodes[]>({
     queryKey: ["/api/tv-series"],
@@ -201,9 +206,21 @@ export default function TvShows() {
                       <CollapsibleTrigger asChild>
                         <div className="flex items-center justify-between gap-4 p-4 cursor-pointer hover-elevate">
                           <div className="flex items-center gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-purple-500/10">
-                              <Tv className="h-5 w-5 text-purple-500" />
-                            </div>
+                            {show.posterPath && !failedPosters.has(show.id) ? (
+                              <div className="h-14 w-10 rounded-md overflow-hidden bg-muted flex-shrink-0">
+                                <img 
+                                  src={show.posterPath} 
+                                  alt={show.name}
+                                  className="h-full w-full object-cover"
+                                  loading="lazy"
+                                  onError={() => handlePosterError(show.id)}
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex h-14 w-10 items-center justify-center rounded-md bg-purple-500/10">
+                                <Tv className="h-5 w-5 text-purple-500" />
+                              </div>
+                            )}
                             <div>
                               <div className="flex items-center gap-2">
                                 <p className="font-medium">{show.name}</p>
