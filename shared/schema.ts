@@ -19,6 +19,7 @@ export const mediaItems = pgTable("media_items", {
   cleanedName: text("cleaned_name"),
   tmdbId: integer("tmdb_id"),
   tmdbName: text("tmdb_name"),
+  posterPath: text("poster_path"),
   year: integer("year"),
   season: integer("season"),
   episode: integer("episode"),
@@ -39,6 +40,8 @@ export const tvSeries = pgTable("tv_series", {
   totalSeasons: integer("total_seasons").default(1),
   totalEpisodes: integer("total_episodes").default(0),
   folderPath: text("folder_path"),
+  tmdbId: integer("tmdb_id"),
+  posterPath: text("poster_path"),
 });
 
 // Movies
@@ -48,6 +51,8 @@ export const movies = pgTable("movies", {
   cleanedName: text("cleaned_name").notNull(),
   year: integer("year"),
   filePath: text("file_path"),
+  tmdbId: integer("tmdb_id"),
+  posterPath: text("poster_path"),
 });
 
 // Organization logs
@@ -83,6 +88,21 @@ export const scanJobs = pgTable("scan_jobs", {
   completedAt: timestamp("completed_at"),
 });
 
+// Organization Jobs - background organize tracking
+export type OrganizeJobStatus = "pending" | "running" | "completed" | "failed";
+export const organizeJobs = pgTable("organize_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  status: text("status").$type<OrganizeJobStatus>().default("pending"),
+  totalFiles: integer("total_files").default(0),
+  processedFiles: integer("processed_files").default(0),
+  successCount: integer("success_count").default(0),
+  failedCount: integer("failed_count").default(0),
+  currentFile: text("current_file"),
+  error: text("error"),
+  startedAt: timestamp("started_at").defaultNow(),
+  completedAt: timestamp("completed_at"),
+});
+
 // Insert schemas
 export const insertMediaItemSchema = createInsertSchema(mediaItems).omit({ id: true, createdAt: true });
 export const insertTvSeriesSchema = createInsertSchema(tvSeries).omit({ id: true });
@@ -90,6 +110,7 @@ export const insertMovieSchema = createInsertSchema(movies).omit({ id: true });
 export const insertOrganizationLogSchema = createInsertSchema(organizationLogs).omit({ id: true, createdAt: true });
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
 export const insertScanJobSchema = createInsertSchema(scanJobs).omit({ id: true, startedAt: true, completedAt: true });
+export const insertOrganizeJobSchema = createInsertSchema(organizeJobs).omit({ id: true, startedAt: true, completedAt: true });
 
 // Types
 export type MediaItem = typeof mediaItems.$inferSelect;
@@ -104,6 +125,8 @@ export type Settings = typeof settings.$inferSelect;
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
 export type ScanJob = typeof scanJobs.$inferSelect;
 export type InsertScanJob = z.infer<typeof insertScanJobSchema>;
+export type OrganizeJob = typeof organizeJobs.$inferSelect;
+export type InsertOrganizeJob = z.infer<typeof insertOrganizeJobSchema>;
 
 // Common release groups/sites to clean from filenames
 export const RELEASE_GROUPS = [
