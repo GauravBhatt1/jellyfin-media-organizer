@@ -43,6 +43,7 @@ export interface IStorage {
   getAllMediaItems(): Promise<MediaItem[]>;
   getMediaItemById(id: string): Promise<MediaItem | undefined>;
   getMediaItemByFilename(filename: string): Promise<MediaItem | undefined>;
+  getMediaItemByPath(originalPath: string): Promise<MediaItem | undefined>;
   getPendingMediaItems(): Promise<MediaItem[]>;
   createMediaItem(item: InsertMediaItem): Promise<MediaItem>;
   updateMediaItem(id: string, updates: Partial<MediaItem>): Promise<MediaItem | undefined>;
@@ -213,6 +214,12 @@ export class MemStorage implements IStorage {
   async getMediaItemByFilename(filename: string): Promise<MediaItem | undefined> {
     return Array.from(this.mediaItems.values()).find(
       (item) => item.originalFilename === filename
+    );
+  }
+
+  async getMediaItemByPath(originalPath: string): Promise<MediaItem | undefined> {
+    return Array.from(this.mediaItems.values()).find(
+      (item) => item.originalPath === originalPath
     );
   }
 
