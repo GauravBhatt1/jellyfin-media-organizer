@@ -904,8 +904,11 @@ export async function registerRoutes(
             // SKIP if file already exists at destination - no database entry needed
             if (destinationPath) {
               const actualDestPath = isDocker ? `${HOST_PREFIX}${destinationPath}` : destinationPath;
-              if (fs.existsSync(actualDestPath)) {
+              const destExists = fs.existsSync(actualDestPath);
+              console.log(`[Scan] File: ${filename}, Dest: ${actualDestPath}, Exists: ${destExists}`);
+              if (destExists) {
                 // File already organized at destination, skip entirely
+                console.log(`[Scan] SKIPPING - file already at destination`);
                 processedFiles++;
                 continue;
               }
