@@ -231,11 +231,9 @@ export default function Settings() {
   };
 
   const getInitialPath = () => {
-    if (!pickerTarget) return "/";
-    if (pickerTarget.type === "moviesDestination") return settings.moviesDestination || "/";
-    if (pickerTarget.type === "tvShowsDestination") return settings.tvShowsDestination || "/";
-    const paths = pickerTarget.type === "movies" ? settings.moviesPaths : settings.tvShowsPaths;
-    return paths[pickerTarget.index] || "/";
+    // Always start from root for easy navigation
+    // Backend handles Docker path translation internally
+    return "/";
   };
 
   return (
