@@ -953,6 +953,13 @@ export async function registerRoutes(
       const moviesDestination = settings.moviesDestination || "";
       const tvShowsDestination = settings.tvShowsDestination || "";
 
+      // CRITICAL: Block scan if no destination paths configured
+      if (!moviesDestination && !tvShowsDestination) {
+        return res.status(400).json({ 
+          error: "Destination paths not configured. Please set 'Movies Destination' and 'TV Shows Destination' in Settings before scanning." 
+        });
+      }
+
       // Start background scan (non-blocking)
       setImmediate(() => {
         runBackgroundScan(job.id, allPaths, moviesDestination, tvShowsDestination);
