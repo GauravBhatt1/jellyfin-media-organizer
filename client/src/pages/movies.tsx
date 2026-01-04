@@ -56,6 +56,27 @@ export default function Movies() {
     },
   });
 
+  const refreshPostersMutation = useMutation({
+    mutationFn: async () => {
+      return apiRequest("POST", "/api/refresh-posters");
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/movies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tv-series"] });
+      toast({
+        title: "Posters Updated",
+        description: data.message || "Posters refreshed from TMDB",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to refresh posters. Check TMDB API key in Settings.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const filteredMovies = movies?.filter((m) =>
     m.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
@@ -115,15 +136,30 @@ export default function Movies() {
             Manage your organized movie library
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => refetch()}
-          disabled={isRefetching}
-          data-testid="button-refresh-movies"
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${isRefetching ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            onClick={() => refreshPostersMutation.mutate()}
+            disabled={refreshPostersMutation.isPending}
+            data-testid="button-refresh-posters"
+          >
+            {refreshPostersMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Film className="h-4 w-4 mr-2" />
+            )}
+            {refreshPostersMutation.isPending ? "Fetching..." : "Refresh Posters"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => refetch()}
+            disabled={isRefetching}
+            data-testid="button-refresh-movies"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${isRefetching ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
