@@ -2211,5 +2211,91 @@ export async function registerRoutes(
     }
   });
 
+  // Refresh posters from TMDB for all movies and TV shows
+  app.post("/api/refresh-posters", async (req, res) => {
+    try {
+      const apiKey = await getTmdbApiKey();
+      if (!apiKey) {
+        return res.status(400).json({ error: "TMDB API key not configured. Set it in Settings." });
+      }
+
+      const movies = await storage.getAllMovies();
+      const tvSeries = await storage.getAllTvSeries();
+      
+      let updatedMovies = 0;
+      let updatedTvShows = 0;
+
+      // Update movies
+      for (const movie of movies) {
+        if (!movie.posterPath && movie.name) {
+          try {
+            let url = `${TMDB_BASE_URL}/search/movie?api_key=${apiKey}&query=${encodeURIComponent(movie.name)}`;
+            if (movie.year) url += `&year=${movie.year}`;
+            
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.results && data.results.length > 0) {
+              const posterPath = data.results[0].poster_path 
+                ? `https://image.tmdb.org/t/p/w342${data.results[0].poster_path}` 
+                : null;
+              
+              if (posterPath) {
+                await storage.updateMovie(movie.id, { 
+                  posterPath, 
+                  tmdbId: data.results[0].id 
+                });
+                updatedMovies++;
+              }
+            }
+            // Small delay to avoid rate limiting
+            await new Promise(r => setTimeout(r, 100));
+          } catch (e) {
+            console.error(`Failed to fetch poster for movie: ${movie.name}`, e);
+          }
+        }
+      }
+
+      // Update TV shows
+      for (const series of tvSeries) {
+        if (!series.posterPath && series.name) {
+          try {
+            let url = `${TMDB_BASE_URL}/search/tv?api_key=${apiKey}&query=${encodeURIComponent(series.name)}`;
+            
+            const response = await fetch(url);
+            const data = await response.json();
+            
+            if (data.results && data.results.length > 0) {
+              const posterPath = data.results[0].poster_path 
+                ? `https://image.tmdb.org/t/p/w342${data.results[0].poster_path}` 
+                : null;
+              
+              if (posterPath) {
+                await storage.updateTvSeries(series.id, { 
+                  posterPath, 
+                  tmdbId: data.results[0].id 
+                });
+                updatedTvShows++;
+              }
+            }
+            await new Promise(r => setTimeout(r, 100));
+          } catch (e) {
+            console.error(`Failed to fetch poster for TV show: ${series.name}`, e);
+          }
+        }
+      }
+
+      res.json({ 
+        success: true, 
+        updatedMovies, 
+        updatedTvShows,
+        message: `Updated ${updatedMovies} movie posters and ${updatedTvShows} TV show posters`
+      });
+    } catch (error) {
+      console.error("Refresh posters error:", error);
+      res.status(500).json({ error: "Failed to refresh posters" });
+    }
+  });
+
   return httpServer;
 }
