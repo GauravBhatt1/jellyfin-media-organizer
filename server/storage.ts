@@ -65,6 +65,7 @@ export interface IStorage {
   getMovieById(id: string): Promise<Movie | undefined>;
   getMovieByName(name: string): Promise<Movie | undefined>;
   createMovie(movie: InsertMovie): Promise<Movie>;
+  updateMovie(id: string, updates: Partial<Movie>): Promise<Movie | undefined>;
   deleteMovie(id: string): Promise<boolean>;
 
   // Organization Logs
@@ -336,6 +337,18 @@ export class MemStorage implements IStorage {
     const newMovie: Movie = { ...movie, id };
     this.movies.set(id, newMovie);
     return newMovie;
+  }
+
+  async updateMovie(
+    id: string,
+    updates: Partial<Movie>
+  ): Promise<Movie | undefined> {
+    const movie = this.movies.get(id);
+    if (!movie) return undefined;
+
+    const updated = { ...movie, ...updates };
+    this.movies.set(id, updated);
+    return updated;
   }
 
   async deleteMovie(id: string): Promise<boolean> {
